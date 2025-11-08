@@ -1,0 +1,29 @@
+# Binaries
+restartko
+*.exe
+*.out
+
+# State and data files
+state.json
+state.json.tmp
+state.json.corrupted
+state.json.backup
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Config with sensitive data (keep example)
+my-config.json
+production-config.json
+
