@@ -1,0 +1,139 @@
+{
+  "ping_interval_seconds": 20,
+  "ping_count": 3,
+  "ping_timeout_seconds": 10,
+  "verification_site_count": 5,
+  
+  "restart_cooldown_minutes": 15,
+  "restart_wait_seconds": 180,
+  "restart_max_retries": 3,
+  "restart_retry_delay_minutes": 10,
+  "post_restart_ping_count": 5,
+  
+  "cluster_enabled": true,
+  "node_id": "pihole1",
+  "cluster_nodes": [
+    "http://192.168.2.8:8181"
+  ],
+  "cluster_api_port": 8181,
+  "cluster_api_listen": "0.0.0.0:8181",
+  "cluster_lock_timeout_seconds": 300,
+  "cluster_health_check_seconds": 10,
+  
+  "state_file_path": "/var/log/restartko/state.json",
+  "state_save_interval_seconds": 30,
+  
+  "power_loss_grace_period_minutes": 5,
+  "power_loss_restart_delay_minutes": 2,
+  
+  "dns_cache_ttl_minutes": 5,
+  "use_raw_sockets": false,
+  
+  "log_level": "info",
+  
+  "sites": [
+    {
+      "name": "Cloudflare Primary (Belgrade PoP)",
+      "address": "1.1.1.1",
+      "priority": 100,
+      "verification_only": false
+    },
+    {
+      "name": "Quad9 (Europe)",
+      "address": "9.9.9.9",
+      "priority": 95,
+      "verification_only": false
+    },
+    {
+      "name": "Quad9 Secondary",
+      "address": "149.112.112.112",
+      "priority": 90,
+      "verification_only": false
+    },
+    {
+      "name": "Cloudflare Secondary",
+      "address": "1.0.0.1",
+      "priority": 85,
+      "verification_only": false
+    },
+    {
+      "name": "SOX.RS (Belgrade IX)",
+      "address": "185.1.27.61",
+      "priority": 80,
+      "verification_only": false
+    },
+    {
+      "name": "Google DNS Primary",
+      "address": "8.8.8.8",
+      "priority": 75,
+      "verification_only": true
+    },
+    {
+      "name": "Google DNS Secondary",
+      "address": "8.8.4.4",
+      "priority": 70,
+      "verification_only": true
+    },
+    {
+      "name": "OpenDNS Primary",
+      "address": "208.67.222.222",
+      "priority": 65,
+      "verification_only": true
+    },
+    {
+      "name": "OpenDNS Secondary",
+      "address": "208.67.220.220",
+      "priority": 60,
+      "verification_only": true
+    },
+    {
+      "name": "AdGuard DNS",
+      "address": "94.140.14.14",
+      "priority": 55,
+      "verification_only": true
+    }
+  ],
+  
+  "router": {
+    "type": "generic_http",
+    "address": "192.168.0.1",
+    "username": "admin",
+    "password": "Ay7%21M76ZK%23%21qN5bmpaTnvKc*uZJ%21xbfG",
+    
+    "login_url": "http://192.168.0.1/goform/logon",
+    "restart_url": "http://192.168.0.1/goform/ad_restart_gateway",
+    "login_method": "POST",
+    "login_form_fields": {
+      "username_login": "{username}",
+      "password_login": "{password}",
+      "language_selector": "en"
+    },
+    "restart_method": "POST",
+    "restart_form_fields": {
+      "tch_devicerestart": "0x00"
+    },
+    "session_cookie_name": "",
+    "verify_ssl": false,
+    
+    "csrf_enabled": true,
+    "csrf_token_url": "http://192.168.0.1/ad_restart_gateway.html",
+    "csrf_token_field": "csrftoken",
+    "csrf_token_pattern": "",
+    "csrf_token_input_name": "csrftoken",
+    
+    "uptime_check_enabled": true,
+    "uptime_check_url": "http://192.168.0.1/st_gateway.html",
+    "uptime_pattern": "",
+    
+    "timeout_seconds": 30,
+    "custom_headers": {
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.5060.114 Safari/537.36",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Connection": "keep-alive",
+      "Origin": "http://192.168.0.1",
+      "Referer": "http://192.168.0.1/"
+    }
+  }
+}
+

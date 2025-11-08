@@ -146,13 +146,22 @@ cd "$INSTALL_DIR"
 # Install dependencies
 echo "Installing Go dependencies..."
 su -s /bin/bash -c "cd $INSTALL_DIR && go mod download" "$SERVICE_USER"
+if [ $? -ne 0 ]; then
+    echo -e "${RED}❌ Failed to download Go dependencies${NC}"
+    exit 1
+fi
 
 # Build the binary with optimizations
 echo "Building restartko binary (optimized)..."
 su -s /bin/bash -c "cd $INSTALL_DIR && go build -ldflags='-s -w' -trimpath -o restartko" "$SERVICE_USER"
+if [ $? -ne 0 ]; then
+    echo -e "${RED}❌ Failed to build binary${NC}"
+    exit 1
+fi
 
 # Make binary executable
 chmod +x restartko
+echo -e "${GREEN}✅ Binary built successfully${NC}"
 
 # Check if raw sockets are enabled in config and grant capability if needed
 if [ -f "$INSTALL_DIR/config.json" ]; then
@@ -279,14 +288,32 @@ if [ "$UPDATE_MODE" = true ]; then
     echo "  • Configuration preserved (your settings kept)"
     echo "  • State/history preserved"
     echo ""
-    echo -e "${YELLOW}🔄 Starting service...${NC}"
+    echo -e "${YELLOW}🔄 Restarting service...${NC}"
     systemctl start "$SERVICE_NAME"
-    sleep 2
-    if systemctl is-active --quiet "$SERVICE_NAME"; then
-        echo -e "${GREEN}✅ Service started successfully!${NC}"
-    else
-        echo -e "${RED}❌ Service failed to start. Check logs:${NC}"
+    RESTART_STATUS=$?
+    
+    if [ $RESTART_STATUS -ne 0 ]; then
+        echo -e "${RED}❌ Failed to start service (exit code: $RESTART_STATUS)${NC}"
+        echo -e "${YELLOW}Checking status...${NC}"
+        systemctl status "$SERVICE_NAME" --no-pager || true
+        echo ""
+        echo -e "${RED}Check logs with:${NC}"
         echo "  sudo journalctl -u $SERVICE_NAME -n 50"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}⏳ Waiting for service to start...${NC}"
+    sleep 3
+    
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+        echo -e "${GREEN}✅ Service restarted successfully!${NC}"
+        echo ""
+        echo -e "${GREEN}📊 Current status:${NC}"
+        systemctl status "$SERVICE_NAME" --no-pager -l | head -20 || true
+    else
+        echo -e "${RED}❌ Service is not active. Check logs:${NC}"
+        echo "  sudo journalctl -u $SERVICE_NAME -n 50"
+        exit 1
     fi
 else
     echo -e "${GREEN}🎉 Installation completed successfully!${NC}"
