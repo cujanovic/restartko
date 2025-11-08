@@ -132,6 +132,36 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
             echo "✅ Capabilities set for raw socket mode"
         fi
         
+        # Create network wait script
+        echo "📡 Creating network wait script..."
+        sudo tee /opt/restartko/wait-for-network.sh > /dev/null <<'WAITSCRIPT'
+#!/bin/bash
+# Wait for network to be ready
+MAX_WAIT=60
+WAIT_INTERVAL=2
+elapsed=0
+
+echo "Waiting for network to be ready..."
+
+# Wait for default route to be available
+while [ $elapsed -lt $MAX_WAIT ]; do
+    if ip route | grep -q default; then
+        echo "✅ Network is ready (default route found)"
+        exit 0
+    fi
+    echo "⏳ Waiting for network... ($elapsed/$MAX_WAIT seconds)"
+    sleep $WAIT_INTERVAL
+    elapsed=$((elapsed + WAIT_INTERVAL))
+done
+
+echo "⚠️  Timeout waiting for network, proceeding anyway (service will auto-restart if needed)"
+exit 0
+WAITSCRIPT
+        
+        sudo chmod +x /opt/restartko/wait-for-network.sh
+        sudo chown "$SERVICE_USER:$SERVICE_USER" /opt/restartko/wait-for-network.sh
+        echo "✅ Network wait script created"
+        
         # Check if raw sockets are enabled for NoNewPrivileges setting
         NO_NEW_PRIVILEGES="true"
         if grep -q '"use_raw_sockets"[[:space:]]*:[[:space:]]*true' config.json 2>/dev/null; then
@@ -155,8 +185,8 @@ User=$SERVICE_USER
 Group=$SERVICE_USER
 WorkingDirectory=/opt/restartko
 
-# Wait 30 seconds for network to be fully ready after boot
-ExecStartPre=/bin/sleep 30
+# Wait for network to be ready before starting
+ExecStartPre=/opt/restartko/wait-for-network.sh
 ExecStart=/opt/restartko/restartko -config /opt/restartko/config.json
 
 # Auto-restart if service crashes

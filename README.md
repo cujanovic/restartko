@@ -1392,7 +1392,7 @@ The systemd service is automatically created by `install.sh` when you choose to 
 The service includes:
 - ✅ **Dedicated service user** - Runs as `restartko` user (not root) for better security
 - ✅ **Network readiness wait** - Waits for `network-online.target` before starting
-- ✅ **30-second startup delay** - Ensures network is fully initialized after power loss
+- ✅ **Smart network wait** - Actively checks for network readiness (exits immediately when ready, max 60s)
 - ✅ **Auto-restart** - Automatically restarts if service crashes
 - ✅ **Journal logging** - Logs to systemd journal (compatible with log2ram)
 - ✅ **Security hardening** - NoNewPrivileges, PrivateTmp, ProtectSystem, ProtectHome
@@ -1412,8 +1412,8 @@ User=restartko
 Group=restartko
 WorkingDirectory=/opt/restartko
 
-# Wait 30 seconds for network to be fully ready after boot
-ExecStartPre=/bin/sleep 30
+# Wait for network to be ready before starting
+ExecStartPre=/opt/restartko/wait-for-network.sh
 ExecStart=/opt/restartko/restartko -config /opt/restartko/config.json
 
 # Auto-restart if service crashes
@@ -1462,15 +1462,15 @@ sudo journalctl -u restartko -f
 sudo journalctl -u restartko -b
 ```
 
-**Why the 30-second delay?**
+**How does the network wait work?**
 
-After a power loss, the network interface and router may not be immediately ready:
-1. Network interface initialization takes time
-2. Router may still be booting
-3. DHCP lease acquisition may be in progress
-4. DNS resolution may not be available yet
+After a power loss or system boot, the network may not be immediately ready. The `wait-for-network.sh` script:
+1. **Checks for default route** - Waits until `ip route` shows a default gateway
+2. **Exits immediately** - Once network is ready (typically 2-5 seconds)
+3. **Times out at 60 seconds** - Proceeds anyway if network takes too long
+4. **Service auto-restarts** - If network isn't ready, systemd will retry
 
-The 30-second delay (`ExecStartPre=/bin/sleep 30`) ensures the network is fully operational before RestartKO starts monitoring.
+This is much faster than a fixed 30-second delay while still handling power loss scenarios gracefully.
 
 **Service User Security:**
 
