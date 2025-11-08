@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -350,13 +351,35 @@ func sendRestartCommandHTTP(client *http.Client, config RouterConfig, csrfToken 
 
 // restartRouterSSH restarts router via SSH
 func restartRouterSSH(config RouterConfig) error {
+	// Read and parse allowed host public key if provided
+	var hostKeyCallback ssh.HostKeyCallback
+	
+	if config.SSHHostKeyFile != "" {
+		pubKeyBytes, err := os.ReadFile(config.SSHHostKeyFile)
+		if err != nil {
+			return fmt.Errorf("failed to read SSH host key file '%s': %v", config.SSHHostKeyFile, err)
+		}
+		
+		allowedKey, err := ssh.ParsePublicKey(pubKeyBytes)
+		if err != nil {
+			return fmt.Errorf("failed to parse SSH host key: %v", err)
+		}
+		
+		hostKeyCallback = ssh.FixedHostKey(allowedKey)
+		LogDebug("SSH host key validation enabled using: %s", config.SSHHostKeyFile)
+	} else {
+		// No host key file configured - use insecure callback with warning
+		LogWarn("⚠️  SSH host key validation disabled (no host key file configured)")
+		hostKeyCallback = ssh.InsecureIgnoreHostKey()
+	}
+	
 	// SSH client configuration
 	sshConfig := &ssh.ClientConfig{
 		User: config.Username,
 		Auth: []ssh.AuthMethod{
 			ssh.Password(config.Password),
 		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // Note: In production, use proper host key verification
+		HostKeyCallback: hostKeyCallback,
 		Timeout:         time.Duration(config.TimeoutSeconds) * time.Second,
 	}
 

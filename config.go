@@ -97,6 +97,7 @@ type RouterConfig struct {
 	// SSH/Telnet settings
 	Port                 int               `json:"port"`
 	RestartCommand       string            `json:"restart_command"` // Command to execute
+	SSHHostKeyFile       string            `json:"ssh_host_key_file"` // Optional: Path to SSH host public key file (e.g., "router_hostkey.pub")
 	
 	// Generic settings
 	TimeoutSeconds       int               `json:"timeout_seconds"`

@@ -806,10 +806,27 @@ Technicolor routers (common with ISPs like Telstra, Optus, etc.) use CSRF tokens
     "username": "ubnt",
     "password": "ubnt",
     "restart_command": "reboot",
-    "timeout_seconds": 30
+    "timeout_seconds": 30,
+    "ssh_host_key_file": ""
   }
 }
 ```
+
+**SSH Host Key Validation (Optional):**
+
+For enhanced security, you can verify the router's SSH host key by providing its public key file:
+
+1. Get the host public key:
+   ```bash
+   ssh-keyscan -t rsa 192.168.1.1 > router_hostkey.pub
+   ```
+
+2. Add the path to config:
+   ```json
+   "ssh_host_key_file": "/opt/restartko/router_hostkey.pub"
+   ```
+
+If omitted, host key validation is skipped (you'll see a warning in logs).
 
 ### TP-Link
 
@@ -1691,6 +1708,8 @@ mv state.json state.json.backup
 MIT License - See LICENSE file for details
 
 Copyright (c) 2025 RestartKO Contributors
+
+**GitHub Repository**: https://github.com/cujanovic/restartko
 
 ---
 

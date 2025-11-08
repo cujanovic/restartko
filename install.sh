@@ -231,7 +231,7 @@ echo -e "${GREEN}⚙️  Creating systemd service...${NC}"
 cat > "$SERVICE_FILE" << EOF
 [Unit]
 Description=RestartKO Network Monitor
-Documentation=https://github.com/yourusername/restartko
+Documentation=https://github.com/cujanovic/restartko
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=0

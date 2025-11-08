@@ -1,6 +1,6 @@
 {
   "ping_interval_seconds": 30,
-  "ping_count": 5,
+  "ping_count": 3,
   "ping_timeout_seconds": 10,
   "verification_site_count": 3,
   
@@ -96,6 +96,7 @@
     
     "port": 22,
     "restart_command": "reboot",
+    "ssh_host_key_file": "",
     
     "timeout_seconds": 30,
     "custom_headers": {

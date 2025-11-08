@@ -1,3 +1,6 @@
+// RestartKO - Network Connectivity Monitor & Router Restart Service
+// GitHub: https://github.com/cujanovic/restartko
+// License: MIT
 package main
 
 import (
@@ -34,6 +37,7 @@ func main() {
 
 	// Normal service mode
 	log.Printf("🚀 RestartKO - Network Connectivity Monitor & Router Restart Service")
+	log.Printf("   GitHub: https://github.com/cujanovic/restartko")
 	log.Printf("═══════════════════════════════════════════════════════════════════")
 
 	// Load configuration
