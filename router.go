@@ -74,30 +74,32 @@ func restartRouterHTTP(config RouterConfig) error {
 	}
 
 	// Step 1: Login
-	LogDebug("Logging into router at %s", config.LoginURL)
+	LogInfo("🔐 Logging into router at %s", config.LoginURL)
 	if err := loginRouterHTTP(client, config); err != nil {
 		return fmt.Errorf("login failed: %v", err)
 	}
 
-	LogDebug("Login successful")
+	LogInfo("✅ Router login successful")
 
 	// Step 2: Get CSRF token if enabled
 	var csrfToken string
 	if config.CSRFEnabled {
-		LogDebug("Fetching CSRF token...")
+		LogInfo("🔑 Fetching CSRF token...")
 		token, err := getCSRFToken(client, config)
 		if err != nil {
 			return fmt.Errorf("failed to get CSRF token: %v", err)
 		}
 		csrfToken = token
-		LogDebug("CSRF token obtained: %s", csrfToken)
+		LogInfo("✅ CSRF token obtained: %s", csrfToken)
 	}
 
 	// Step 3: Send restart command
-	LogDebug("Sending restart command")
+	LogInfo("📤 Sending restart command to router")
 	if err := sendRestartCommandHTTP(client, config, csrfToken); err != nil {
 		return fmt.Errorf("restart command failed: %v", err)
 	}
+	
+	LogInfo("✅ Restart command sent successfully")
 
 	return nil
 }
@@ -360,7 +362,7 @@ func restartRouterSSH(config RouterConfig) error {
 
 	// Connect to router
 	address := fmt.Sprintf("%s:%d", config.Address, config.Port)
-	LogDebug("Connecting to router via SSH at %s", address)
+	LogInfo("🔐 Connecting to router via SSH at %s", address)
 
 	client, err := ssh.Dial("tcp", address, sshConfig)
 	if err != nil {
@@ -376,7 +378,7 @@ func restartRouterSSH(config RouterConfig) error {
 	defer session.Close()
 
 	// Execute restart command
-	LogDebug("Executing restart command: %s", config.RestartCommand)
+	LogInfo("📤 Executing SSH restart command: %s", config.RestartCommand)
 	
 	var outputBuf bytes.Buffer
 	session.Stdout = &outputBuf
@@ -387,12 +389,14 @@ func restartRouterSSH(config RouterConfig) error {
 	// Note: SSH session might disconnect during restart, which is expected
 	// Check output for success indicators
 	output := outputBuf.String()
-	LogDebug("Command output: %s", output)
+	if output != "" {
+		LogInfo("📋 SSH command output: %s", strings.TrimSpace(output))
+	}
 
 	if err != nil {
 		// Check if error is due to connection being closed (expected during restart)
 		if strings.Contains(err.Error(), "connection") || strings.Contains(err.Error(), "closed") {
-			LogDebug("Connection closed during restart (expected)")
+			LogInfo("✅ Connection closed during restart (expected behavior)")
 			return nil
 		}
 		return fmt.Errorf("restart command failed: %v", err)
@@ -412,7 +416,7 @@ func restartRouterTelnet(config RouterConfig) error {
 
 // VerifyRestartSuccess verifies that the restart was successful by pinging sites
 func VerifyRestartSuccess(sites []Site, config Config, dnsCache *DNSCache) bool {
-	LogInfo("Verifying restart success (waiting %d seconds)...", config.RestartWaitSeconds)
+	LogInfo("⏳ Verifying restart success (waiting %d seconds for router to come online)...", config.RestartWaitSeconds)
 	
 	// Wait for router to come back online
 	time.Sleep(time.Duration(config.RestartWaitSeconds) * time.Second)
@@ -421,17 +425,20 @@ func VerifyRestartSuccess(sites []Site, config Config, dnsCache *DNSCache) bool 
 	verificationCount := min(config.VerificationSiteCount, len(sites))
 	successCount := 0
 	
+	LogInfo("🔍 Testing connectivity to %d verification sites...", verificationCount)
+	
 	for i := 0; i < verificationCount; i++ {
 		site := sites[i]
-		LogDebug("Verifying site %s...", getSiteDisplayName(site))
+		LogInfo("   Testing %s...", getSiteDisplayName(site))
 		
 		result := PingSiteWithDNS(site, config.PostRestartPingCount, config.PingTimeoutSeconds, dnsCache, config.UseRawSockets)
 		if result.Success && result.PacketLoss < 50 {
 			successCount++
-			LogDebug("✓ Site %s is reachable (latency: %.2f ms)", 
+			LogInfo("   ✓ %s is reachable (latency: %.2fms)", 
 				getSiteDisplayName(site), result.Latency)
 		} else {
-			LogDebug("✗ Site %s is not reachable", getSiteDisplayName(site))
+			LogWarn("   ✗ %s is not reachable (packet loss: %d%%)", 
+				getSiteDisplayName(site), result.PacketLoss)
 		}
 	}
 	
@@ -457,7 +464,7 @@ func GetRouterUptime(config RouterConfig) (time.Duration, bool, error) {
 		return 0, false, fmt.Errorf("uptime check not enabled or URL not configured")
 	}
 	
-	LogDebug("Checking router uptime from %s", config.UptimeCheckURL)
+	LogInfo("📊 Checking router uptime from %s", config.UptimeCheckURL)
 	
 	// Create HTTP client with cookie jar
 	jar, err := cookiejar.New(nil)
@@ -477,10 +484,12 @@ func GetRouterUptime(config RouterConfig) (time.Duration, bool, error) {
 	
 	// Login first if we need authentication
 	if config.LoginURL != "" && config.Username != "" {
-		LogDebug("Logging into router for uptime check...")
+		LogInfo("🔐 Logging into router for uptime check...")
 		if err := loginRouterHTTP(client, config); err != nil {
-			LogWarn("Login failed for uptime check, trying without auth: %v", err)
+			LogWarn("⚠️  Login failed for uptime check, trying without auth: %v", err)
 			// Continue anyway - the page might be accessible without login
+		} else {
+			LogInfo("✅ Login successful")
 		}
 	}
 	
@@ -520,7 +529,9 @@ func GetRouterUptime(config RouterConfig) (time.Duration, bool, error) {
 	powerOutageSuspected := uptime < 10*time.Minute
 	
 	if powerOutageSuspected {
-		LogWarn("⚡ Power outage suspected (router uptime < 10 minutes)")
+		LogWarn("⚡ Power outage suspected! Router uptime (%s) is less than 10 minutes", formatDuration(uptime))
+	} else {
+		LogInfo("✅ Router uptime is normal (no recent power loss detected)")
 	}
 	
 	return uptime, powerOutageSuspected, nil
