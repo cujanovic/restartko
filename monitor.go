@@ -169,37 +169,54 @@ func (m *Monitor) calculateClusterStagger() int {
 		return 0
 	}
 	
-	// Create a sorted list of all nodes (including this one)
-	allNodes := make([]string, 0, len(m.config.ClusterNodes)+1)
-	allNodes = append(allNodes, m.config.NodeID)
-	allNodes = append(allNodes, m.config.ClusterNodes...)
+	// Create a sorted list of all node IDs
+	var allNodeIDs []string
+	
+	// If ClusterAllNodeIDs is provided, use it (recommended)
+	if len(m.config.ClusterAllNodeIDs) > 0 {
+		allNodeIDs = make([]string, len(m.config.ClusterAllNodeIDs))
+		copy(allNodeIDs, m.config.ClusterAllNodeIDs)
+	} else {
+		// Fallback: build list from this node + cluster nodes
+		// This assumes cluster_nodes contains node IDs, not URLs
+		allNodeIDs = make([]string, 0, len(m.config.ClusterNodes)+1)
+		allNodeIDs = append(allNodeIDs, m.config.NodeID)
+		allNodeIDs = append(allNodeIDs, m.config.ClusterNodes...)
+	}
 	
 	// Sort to ensure consistent ordering across all nodes
 	// Simple bubble sort for deterministic ordering
-	for i := 0; i < len(allNodes); i++ {
-		for j := i + 1; j < len(allNodes); j++ {
-			if allNodes[i] > allNodes[j] {
-				allNodes[i], allNodes[j] = allNodes[j], allNodes[i]
+	for i := 0; i < len(allNodeIDs); i++ {
+		for j := i + 1; j < len(allNodeIDs); j++ {
+			if allNodeIDs[i] > allNodeIDs[j] {
+				allNodeIDs[i], allNodeIDs[j] = allNodeIDs[j], allNodeIDs[i]
 			}
 		}
 	}
 	
 	// Find this node's position
-	nodePosition := 0
-	for i, node := range allNodes {
-		if node == m.config.NodeID || node == m.config.ClusterAPIListen {
+	nodePosition := -1
+	for i, nodeID := range allNodeIDs {
+		if nodeID == m.config.NodeID {
 			nodePosition = i
 			break
 		}
 	}
 	
+	// If node not found (shouldn't happen), default to position 0
+	if nodePosition < 0 {
+		LogWarn("Node ID '%s' not found in cluster list, using position 0", m.config.NodeID)
+		nodePosition = 0
+	}
+	
 	// Calculate stagger: distribute evenly across the stagger window
-	totalNodes := len(allNodes)
+	totalNodes := len(allNodeIDs)
 	staggerPerNode := m.config.ClusterStaggerSeconds / totalNodes
 	
 	offset := nodePosition * staggerPerNode
 	
-	LogDebug("Cluster stagger calculation: position=%d/%d, offset=%ds", nodePosition, totalNodes, offset)
+	LogInfo("Cluster stagger: node='%s' position=%d/%d offset=%ds (all nodes: %v)", 
+		m.config.NodeID, nodePosition+1, totalNodes, offset, allNodeIDs)
 	
 	return offset
 }

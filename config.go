@@ -26,6 +26,7 @@ type Config struct {
 	ClusterEnabled           bool     `json:"cluster_enabled"`
 	NodeID                   string   `json:"node_id"`                     // Unique identifier for this node
 	ClusterNodes             []string `json:"cluster_nodes"`               // List of other node URLs (http://ip:port)
+	ClusterAllNodeIDs        []string `json:"cluster_all_node_ids"`        // List of ALL node IDs in cluster for stagger calculation (optional)
 	ClusterAPIPort           int      `json:"cluster_api_port"`
 	ClusterAPIListen         string   `json:"cluster_api_listen"`
 	ClusterLockTimeoutSeconds int     `json:"cluster_lock_timeout_seconds"` // How long a lock is valid

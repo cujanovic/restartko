@@ -253,13 +253,15 @@ Enable cluster mode to run multiple instances with coordination:
   "cluster_api_listen": "0.0.0.0:8080",
   "cluster_lock_timeout_seconds": 300,
   "cluster_health_check_seconds": 10,
-  "cluster_stagger_seconds": 15
+  "cluster_stagger_seconds": 15,
+  "cluster_all_node_ids": ["node-1", "node-2", "node-3"]
 }
 ```
 
 - `cluster_enabled` - Enable cluster coordination (default: false)
 - `node_id` - Unique identifier for this node
-- `cluster_nodes` - List of other node URLs
+- `cluster_nodes` - List of other node URLs (for health checks and locking)
+- `cluster_all_node_ids` - **List of ALL node IDs in the cluster** (required for stagger calculation - must be identical on all nodes)
 - `cluster_api_port` - Port for cluster API
 - `cluster_api_listen` - Listen address for API (default: "0.0.0.0:8080")
 - `cluster_lock_timeout_seconds` - Lock expiry time (default: 300)
@@ -1108,14 +1110,17 @@ Cluster mode allows multiple RestartKO instances to run simultaneously while ens
   "cluster_api_listen": "0.0.0.0:8080",
   "cluster_lock_timeout_seconds": 300,
   "cluster_health_check_seconds": 10,
-  "cluster_stagger_seconds": 20
+  "cluster_stagger_seconds": 20,
+  "cluster_all_node_ids": ["node-1", "node-2", "node-3"]
 }
 ```
 
+**Important:** The `cluster_all_node_ids` array must contain ALL node IDs in your cluster and must be **identical on every node**. This is used to calculate each node's stagger offset.
+
 **Cluster Stagger:** With `cluster_stagger_seconds` set to 20 and 3 nodes, checks will be staggered:
-- Node 1: Starts immediately (0s offset)
-- Node 2: Starts after 6s offset (20s / 3 nodes)
-- Node 3: Starts after 13s offset
+- Node 1 (`node-1`): Position 0 → 0s offset → Starts immediately
+- Node 2 (`node-2`): Position 1 → 6s offset → Starts after 6 seconds (20s / 3)
+- Node 3 (`node-3`): Position 2 → 13s offset → Starts after 13 seconds (20s / 3 × 2)
 
 This prevents all nodes from pinging simultaneously and provides better load distribution.
 

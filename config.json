@@ -13,6 +13,7 @@
   "cluster_enabled": false,
   "node_id": "node-1",
   "cluster_nodes": [],
+  "cluster_all_node_ids": ["node-1", "node-2"],
   "cluster_api_port": 8080,
   "cluster_api_listen": "0.0.0.0:8080",
   "cluster_lock_timeout_seconds": 300,
