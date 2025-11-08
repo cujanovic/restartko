@@ -153,18 +153,16 @@ func (m *Monitor) checkSite(site Site, verificationSites []Site) {
 	// Ping the site with DNS cache
 	result := PingSiteWithDNS(site, m.config.PingCount, m.config.PingTimeoutSeconds, m.dnsCache, m.config.UseRawSockets)
 
-	// Update state
+	// Update state (this will log the ping result to systemd)
 	UpdateSiteState(m.state, site, result)
 
 	// If site is up, nothing to do
 	if result.Success && result.PacketLoss < 50 {
-		LogDebug("✓ Site %s is UP (latency: %.2f ms, loss: %d%%)",
-			getSiteDisplayName(site), result.Latency, result.PacketLoss)
 		return
 	}
 
 	// Site is down - verify with other sites
-	LogWarn("⚠️  Site %s appears to be DOWN (loss: %d%%)", getSiteDisplayName(site), result.PacketLoss)
+	LogWarn("⚠️  Site %s appears to be DOWN, verifying with other sites...", getSiteDisplayName(site))
 
 	// Verify connectivity with other sites
 	verifyResult := VerifyConnectivityWithDNS(verificationSites, m.config.VerificationSiteCount, m.config, m.dnsCache)

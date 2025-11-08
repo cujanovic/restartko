@@ -160,9 +160,13 @@ func UpdateSiteState(state *ServiceState, site Site, pingResult PingResult) {
 	siteState.LastCheckTime = now
 	
 	if pingResult.Success {
-		// Log latency to systemd journal (not stored in state)
+		// Log every successful ping to systemd journal (like ping-monitor)
 		if pingResult.Latency > 0 {
-			LogDebug("Site %s: latency=%.2fms, loss=%d%%", getSiteDisplayName(site), pingResult.Latency, pingResult.PacketLoss)
+			LogInfo("✓ %s - latency: %.2fms, packet loss: %d%%", 
+				getSiteDisplayName(site), pingResult.Latency, pingResult.PacketLoss)
+		} else {
+			// Edge case: successful ping but no latency data
+			LogInfo("✓ %s - up (no latency data)", getSiteDisplayName(site))
 		}
 		
 		// If site was down, record recovery
@@ -171,17 +175,21 @@ func UpdateSiteState(state *ServiceState, site Site, pingResult PingResult) {
 			siteState.IsDown = false
 			
 			// Log recovery to systemd journal
-			LogInfo("✅ Site %s recovered (downtime: %s, latency: %.2fms)", 
+			LogInfo("🟢 RECOVERY: %s is now UP (was down for %s, latency: %.2fms)", 
 				getSiteDisplayName(site), formatDuration(downtime), pingResult.Latency)
 		}
 	} else {
+		// Log failed ping to systemd journal
+		LogWarn("✗ %s - ping failed (packet loss: %d%%)", 
+			getSiteDisplayName(site), pingResult.PacketLoss)
+		
 		// If site just went down, record it
 		if !siteState.IsDown {
 			siteState.IsDown = true
 			siteState.DownSince = now
 			
-			// Log down event to systemd journal
-			LogWarn("⚠️  Site %s went down (packet loss: %d%%)", getSiteDisplayName(site), pingResult.PacketLoss)
+			// Log down alert to systemd journal
+			LogError("🔴 ALERT: %s is now DOWN", getSiteDisplayName(site))
 		}
 	}
 }
