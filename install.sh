@@ -1,140 +1,188 @@
 #!/bin/bash
 
 # RestartKO Installation Script
+# This script installs RestartKO as a systemd service
 
 set -e
 
-echo "════════════════════════════════════════════"
-echo "  RestartKO Installation"
-echo "════════════════════════════════════════════"
-echo ""
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Configuration
+SERVICE_NAME="restartko"
+SERVICE_USER="restartko"
+INSTALL_DIR="/opt/restartko"
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+
+# Check if this is an update or fresh install
+UPDATE_MODE=false
+if [ -d "$INSTALL_DIR" ] && [ -f "$SERVICE_FILE" ]; then
+    UPDATE_MODE=true
+    echo -e "${YELLOW}🔄 Existing installation detected - Running in UPDATE mode${NC}"
+else
+    echo -e "${GREEN}🚀 Installing RestartKO Service${NC}"
+fi
+echo "================================================"
+
+# Check if running as root
+if [[ $EUID -ne 0 ]]; then
+   echo -e "${RED}❌ This script must be run as root${NC}"
+   echo "Please run: sudo $0"
+   exit 1
+fi
 
 # Check if Go is installed
 if ! command -v go &> /dev/null; then
-    echo "❌ Go is not installed. Please install Go 1.21 or later."
+    echo -e "${YELLOW}⚠️  Go is not installed. Please install Go 1.21 or later.${NC}"
     echo "   Visit: https://golang.org/doc/install"
     exit 1
 fi
 
 GO_VERSION=$(go version | awk '{print $3}' | sed 's/go//')
-echo "✓ Go version: $GO_VERSION"
+echo -e "${GREEN}✓ Go version: $GO_VERSION${NC}"
 
 # Check Go version (require 1.21+)
 REQUIRED_VERSION="1.21"
 if [ "$(printf '%s\n' "$REQUIRED_VERSION" "$GO_VERSION" | sort -V | head -n1)" != "$REQUIRED_VERSION" ]; then
-    echo "❌ Go version 1.21 or later is required. Current version: $GO_VERSION"
+    echo -e "${RED}❌ Go version 1.21 or later is required. Current version: $GO_VERSION${NC}"
     exit 1
 fi
 
-echo ""
-echo "📦 Downloading dependencies..."
-go mod download
-
-echo ""
-echo "🔨 Building RestartKO..."
-go build -o restartko -ldflags="-s -w"
-
-if [ ! -f restartko ]; then
-    echo "❌ Build failed"
-    exit 1
-fi
-
-echo "✅ Build successful"
-
-# Create state directory in /var/log (works with log2ram)
-echo ""
-echo "📁 Creating state directory..."
-sudo mkdir -p /var/log/restartko
-sudo chown $USER:$USER /var/log/restartko
-echo "✅ State directory created: /var/log/restartko"
-
-# Set capabilities for ICMP ping (Linux only) - only needed if use_raw_sockets is true
-if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-    echo ""
-    echo "🔐 Setting capabilities for ICMP ping (raw sockets)..."
-    echo "   Note: Only needed if 'use_raw_sockets' is set to true in config"
-    
-    if command -v setcap &> /dev/null; then
-        sudo setcap cap_net_raw+ep ./restartko || {
-            echo "⚠️  Failed to set capabilities."
-            echo "   If using 'use_raw_sockets: true', run as root or fix capabilities"
-            echo "   If using 'use_raw_sockets: false' (default), no special permissions needed"
-        }
-        echo "✅ Capabilities set for raw socket mode"
+# Create service user (skip if updating)
+if [ "$UPDATE_MODE" = false ]; then
+    echo -e "${GREEN}👤 Creating service user...${NC}"
+    if ! id "$SERVICE_USER" &>/dev/null; then
+        useradd -r -s /bin/false -d "$INSTALL_DIR" -c "RestartKO Network Monitor" "$SERVICE_USER"
+        echo -e "${GREEN}✅ Service user created: $SERVICE_USER${NC}"
     else
-        echo "⚠️  setcap not found."
-        echo "   For raw sockets mode, you may need to run as root"
-        echo "   Or use 'use_raw_sockets: false' in config (default)"
+        echo -e "${YELLOW}⚠️  Service user already exists: $SERVICE_USER${NC}"
+    fi
+else
+    echo -e "${GREEN}👤 Service user already exists: $SERVICE_USER${NC}"
+fi
+
+# Stop service if updating
+if [ "$UPDATE_MODE" = true ]; then
+    echo -e "${YELLOW}⏹️  Stopping service for update...${NC}"
+    systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+    echo -e "${GREEN}✅ Service stopped${NC}"
+fi
+
+# Save existing config and state to temporary location if updating
+TEMP_CONFIG=""
+TEMP_STATE=""
+if [ "$UPDATE_MODE" = true ] && [ -f "$INSTALL_DIR/config.json" ]; then
+    echo -e "${YELLOW}💾 Preserving existing configuration...${NC}"
+    TEMP_CONFIG=$(mktemp)
+    cp "$INSTALL_DIR/config.json" "$TEMP_CONFIG"
+    echo -e "${GREEN}✅ Configuration preserved${NC}"
+fi
+
+if [ "$UPDATE_MODE" = true ] && [ -f "/var/log/restartko/state.json" ]; then
+    echo -e "${YELLOW}💾 Preserving state file (history)...${NC}"
+    TEMP_STATE=$(mktemp)
+    cp "/var/log/restartko/state.json" "$TEMP_STATE"
+    echo -e "${GREEN}✅ State file preserved${NC}"
+fi
+
+# Create installation directory
+echo -e "${GREEN}📁 Creating installation directory...${NC}"
+mkdir -p "$INSTALL_DIR"
+
+# Create state directory
+echo -e "${GREEN}📁 Creating state directory...${NC}"
+mkdir -p /var/log/restartko
+
+# Copy files to installation directory
+echo -e "${GREEN}📋 Copying service files...${NC}"
+cp *.go "$INSTALL_DIR/" 2>/dev/null || true
+cp go.mod "$INSTALL_DIR/"
+cp go.sum "$INSTALL_DIR/" 2>/dev/null || true
+
+# Copy config file (if not updating)
+if [ "$UPDATE_MODE" = false ]; then
+    if [ -f "config.serbia.json" ]; then
+        echo -e "${GREEN}📋 Using config.serbia.json as default config${NC}"
+        cp config.serbia.json "$INSTALL_DIR/config.json"
+    elif [ -f "config.json" ]; then
+        cp config.json "$INSTALL_DIR/"
+    else
+        echo -e "${RED}❌ No config file found (config.json or config.serbia.json)${NC}"
+        exit 1
     fi
 fi
 
-# Check if config.json exists
-if [ ! -f config.json ]; then
-    echo ""
-    echo "⚠️  config.json not found"
-    echo "   Please create config.json before installing as service"
-    echo "   For Serbia/Belgrade, use:"
-    echo "     cp config.serbia.json config.json"
+# Restore existing config if this was an update
+if [ "$UPDATE_MODE" = true ] && [ -n "$TEMP_CONFIG" ] && [ -f "$TEMP_CONFIG" ]; then
+    cp "$TEMP_CONFIG" "$INSTALL_DIR/config.json"
+    rm -f "$TEMP_CONFIG"
+    echo -e "${GREEN}✅ Existing configuration restored${NC}"
 fi
 
-echo ""
-echo "════════════════════════════════════════════"
-echo "  Installation Complete!"
-echo "════════════════════════════════════════════"
-echo ""
+# Restore existing state file if this was an update
+if [ "$UPDATE_MODE" = true ] && [ -n "$TEMP_STATE" ] && [ -f "$TEMP_STATE" ]; then
+    cp "$TEMP_STATE" "/var/log/restartko/state.json"
+    rm -f "$TEMP_STATE"
+    echo -e "${GREEN}✅ State file (history) restored${NC}"
+fi
 
-# Ask if user wants to install systemd service
-if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-    echo "📦 Install as systemd service?"
-    read -p "Install to /opt/restartko and create systemd service? (y/N) " -n 1 -r
-    echo
-    
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        echo ""
-        echo "🚀 Installing systemd service..."
-        
-        # Check if config.json exists
-        if [ ! -f config.json ]; then
-            echo "❌ config.json not found. Please create it first."
-            exit 1
-        fi
-        
-        # Create service user
-        SERVICE_USER="restartko"
-        echo "👤 Creating service user..."
-        if ! id "$SERVICE_USER" &>/dev/null; then
-            sudo useradd -r -s /bin/false -d /opt/restartko -c "RestartKO Network Monitor" "$SERVICE_USER"
-            echo "✅ Service user created: $SERVICE_USER"
+# Create one-time backup of original config for fresh installs only
+if [ "$UPDATE_MODE" = false ] && [ ! -f "$INSTALL_DIR/config.json.original" ]; then
+    cp "$INSTALL_DIR/config.json" "$INSTALL_DIR/config.json.original"
+    echo -e "${GREEN}✅ Original configuration backed up to config.json.original${NC}"
+fi
+
+# Set proper ownership
+chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
+chown -R "$SERVICE_USER:$SERVICE_USER" /var/log/restartko
+
+# Build the service binary
+echo -e "${GREEN}🔨 Building service binary...${NC}"
+cd "$INSTALL_DIR"
+
+# Install dependencies
+echo "Installing Go dependencies..."
+su -s /bin/bash -c "cd $INSTALL_DIR && go mod download" "$SERVICE_USER"
+
+# Build the binary with optimizations
+echo "Building restartko binary (optimized)..."
+su -s /bin/bash -c "cd $INSTALL_DIR && go build -ldflags='-s -w' -trimpath -o restartko" "$SERVICE_USER"
+
+# Make binary executable
+chmod +x restartko
+
+# Check if raw sockets are enabled in config and grant capability if needed
+if [ -f "$INSTALL_DIR/config.json" ]; then
+    USE_RAW=$(grep -o '"use_raw_sockets"[[:space:]]*:[[:space:]]*true' "$INSTALL_DIR/config.json")
+    if [ -n "$USE_RAW" ]; then
+        echo -e "${GREEN}🔐 Raw sockets enabled in config, granting CAP_NET_RAW capability...${NC}"
+        setcap cap_net_raw+ep restartko
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}✅ CAP_NET_RAW capability granted${NC}"
+            getcap restartko | grep cap_net_raw > /dev/null
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}✅ Capability verified${NC}"
+            fi
         else
-            echo "ℹ️  Service user already exists: $SERVICE_USER"
+            echo -e "${YELLOW}⚠️  Failed to set capability. Install 'libcap' package.${NC}"
+            echo -e "${YELLOW}   Service will fall back to unprivileged mode.${NC}"
         fi
-        
-        # Create installation directory
-        echo "📁 Creating /opt/restartko..."
-        sudo mkdir -p /opt/restartko
-        
-        # Copy binary and config
-        echo "📋 Copying files..."
-        sudo cp restartko /opt/restartko/
-        sudo cp config.json /opt/restartko/
-        sudo chmod +x /opt/restartko/restartko
-        
-        # Set proper ownership
-        echo "🔐 Setting file ownership..."
-        sudo chown -R "$SERVICE_USER:$SERVICE_USER" /opt/restartko
-        
-        # Set ownership for state directory
-        sudo chown -R "$SERVICE_USER:$SERVICE_USER" /var/log/restartko
-        
-        # Set capabilities for the installed binary (if using raw sockets)
-        if command -v setcap &> /dev/null; then
-            sudo setcap cap_net_raw+ep /opt/restartko/restartko 2>/dev/null || true
-            echo "✅ Capabilities set for raw socket mode"
-        fi
-        
-        # Create network wait script
-        echo "📡 Creating network wait script..."
-        sudo tee /opt/restartko/wait-for-network.sh > /dev/null <<'WAITSCRIPT'
+    else
+        echo -e "${GREEN}ℹ️  Raw sockets disabled in config (using unprivileged mode)${NC}"
+        echo -e "${GREEN}   To enable: Set use_raw_sockets: true in config.json${NC}"
+    fi
+else
+    echo -e "${YELLOW}⚠️  Config file not found, skipping capability grant${NC}"
+fi
+
+echo -e "${GREEN}✅ Service binary built successfully${NC}"
+
+# Create network wait script
+echo -e "${GREEN}📡 Creating network wait script...${NC}"
+cat > "$INSTALL_DIR/wait-for-network.sh" << 'WAITSCRIPT'
 #!/bin/bash
 # Wait for network to be ready
 MAX_WAIT=60
@@ -157,21 +205,23 @@ done
 echo "⚠️  Timeout waiting for network, proceeding anyway (service will auto-restart if needed)"
 exit 0
 WAITSCRIPT
-        
-        sudo chmod +x /opt/restartko/wait-for-network.sh
-        sudo chown "$SERVICE_USER:$SERVICE_USER" /opt/restartko/wait-for-network.sh
-        echo "✅ Network wait script created"
-        
-        # Check if raw sockets are enabled for NoNewPrivileges setting
-        NO_NEW_PRIVILEGES="true"
-        if grep -q '"use_raw_sockets"[[:space:]]*:[[:space:]]*true' config.json 2>/dev/null; then
-            NO_NEW_PRIVILEGES="false"
-            echo "ℹ️  Raw sockets enabled - adjusting security settings"
-        fi
-        
-        # Create systemd service file
-        echo "⚙️  Creating systemd service..."
-        sudo tee /etc/systemd/system/restartko.service > /dev/null <<EOF
+
+chmod +x "$INSTALL_DIR/wait-for-network.sh"
+chown "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR/wait-for-network.sh"
+
+# Check if raw sockets are enabled for NoNewPrivileges setting
+NO_NEW_PRIVILEGES="true"
+if [ -f "$INSTALL_DIR/config.json" ]; then
+    USE_RAW_SOCKETS=$(grep -o '"use_raw_sockets"[[:space:]]*:[[:space:]]*true' "$INSTALL_DIR/config.json")
+    if [ -n "$USE_RAW_SOCKETS" ]; then
+        NO_NEW_PRIVILEGES="false"
+        echo -e "${GREEN}ℹ️  Raw sockets enabled - setting NoNewPrivileges=false for capabilities${NC}"
+    fi
+fi
+
+# Create systemd service file
+echo -e "${GREEN}⚙️  Creating systemd service...${NC}"
+cat > "$SERVICE_FILE" << EOF
 [Unit]
 Description=RestartKO Network Monitor
 Documentation=https://github.com/yourusername/restartko
@@ -183,15 +233,19 @@ StartLimitIntervalSec=0
 Type=simple
 User=$SERVICE_USER
 Group=$SERVICE_USER
-WorkingDirectory=/opt/restartko
+WorkingDirectory=$INSTALL_DIR
 
 # Wait for network to be ready before starting
-ExecStartPre=/opt/restartko/wait-for-network.sh
-ExecStart=/opt/restartko/restartko -config /opt/restartko/config.json
+ExecStartPre=$INSTALL_DIR/wait-for-network.sh
+ExecStart=$INSTALL_DIR/restartko
 
-# Auto-restart if service crashes
+# Auto-restart if service crashes or network wasn't ready
 Restart=always
-RestartSec=10
+RestartSec=15
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=restartko
 
 # Security settings
 NoNewPrivileges=$NO_NEW_PRIVILEGES
@@ -200,11 +254,6 @@ ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/log/restartko
 
-# Logging
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=restartko
-
 # Resource limits
 LimitNOFILE=65536
 MemoryMax=256M
@@ -212,55 +261,66 @@ MemoryMax=256M
 [Install]
 WantedBy=multi-user.target
 EOF
-        
-        echo "✅ Systemd service created"
-        
-        # Reload systemd and enable service
-        sudo systemctl daemon-reload
-        sudo systemctl enable restartko
-        
-        echo ""
-        echo "✅ Systemd service installed!"
-        echo ""
-        echo "Service Details:"
-        echo "  • Service Name: restartko"
-        echo "  • Install Directory: /opt/restartko"
-        echo "  • Service User: $SERVICE_USER"
-        echo "  • Config File: /opt/restartko/config.json"
-        echo "  • State File: /var/log/restartko/state.json"
-        echo ""
-        echo "To start the service:"
-        echo "  sudo systemctl start restartko"
-        echo ""
-        echo "To check status:"
-        echo "  sudo systemctl status restartko"
-        echo ""
-        echo "To view logs:"
-        echo "  sudo journalctl -u restartko -f"
-        echo ""
-        echo "To edit config:"
-        echo "  sudo nano /opt/restartko/config.json"
-        echo "  sudo systemctl restart restartko"
-        echo ""
+
+# Reload systemd and enable service
+echo -e "${GREEN}🔄 Reloading systemd and enabling service...${NC}"
+systemctl daemon-reload
+systemctl enable "$SERVICE_NAME"
+
+echo -e "${GREEN}✅ Service installed and enabled${NC}"
+
+echo ""
+if [ "$UPDATE_MODE" = true ]; then
+    echo -e "${GREEN}🎉 Update completed successfully!${NC}"
+    echo "================================================"
+    echo -e "${GREEN}What was updated:${NC}"
+    echo "  • Service binary rebuilt with latest code"
+    echo "  • Dependencies updated (go.mod, go.sum)"
+    echo "  • Configuration preserved (your settings kept)"
+    echo "  • State/history preserved"
+    echo ""
+    echo -e "${YELLOW}🔄 Starting service...${NC}"
+    systemctl start "$SERVICE_NAME"
+    sleep 2
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+        echo -e "${GREEN}✅ Service started successfully!${NC}"
     else
-        echo ""
-        echo "Skipping systemd installation."
-        echo ""
-        echo "Manual steps:"
-        echo "  1. Configure config.json with your settings"
-        echo "  2. Test ping: ./restartko -test-ping 8.8.8.8"
-        echo "  3. Test router: ./restartko -test-router"
-        echo "  4. Run service: ./restartko"
-        echo ""
-        echo "State file location: /var/log/restartko/state.json"
-        echo "  ✓ Compatible with log2ram (minimal SD card writes)"
-        echo ""
+        echo -e "${RED}❌ Service failed to start. Check logs:${NC}"
+        echo "  sudo journalctl -u $SERVICE_NAME -n 50"
     fi
 else
-    echo "Manual steps:"
-    echo "  1. Configure config.json with your settings"
-    echo "  2. Test ping: ./restartko -test-ping 8.8.8.8"
-    echo "  3. Test router: ./restartko -test-router"
-    echo "  4. Run service: ./restartko"
+    echo -e "${GREEN}🎉 Installation completed successfully!${NC}"
+    echo "================================================"
+    echo -e "${GREEN}Service Details:${NC}"
+    echo "  • Service Name: $SERVICE_NAME"
+    echo "  • Install Directory: $INSTALL_DIR"
+    echo "  • Service User: $SERVICE_USER"
+    echo "  • Config File: $INSTALL_DIR/config.json"
+    echo "  • State File: /var/log/restartko/state.json"
     echo ""
+    echo -e "${YELLOW}⚠️  Next Steps:${NC}"
+    echo "  1. Update router password in: $INSTALL_DIR/config.json"
+    echo "  2. Start the service with: sudo systemctl start $SERVICE_NAME"
 fi
+
+echo ""
+echo -e "${GREEN}Management Commands:${NC}"
+echo "  • Start service:    sudo systemctl start $SERVICE_NAME"
+echo "  • Stop service:     sudo systemctl stop $SERVICE_NAME"
+echo "  • Restart service:  sudo systemctl restart $SERVICE_NAME"
+echo "  • Check status:     sudo systemctl status $SERVICE_NAME"
+echo "  • View logs:        sudo journalctl -u $SERVICE_NAME -f"
+echo ""
+echo -e "${GREEN}📝 Configuration:${NC}"
+echo "  • Edit config:      sudo nano $INSTALL_DIR/config.json"
+echo "  • Original backup:  $INSTALL_DIR/config.json.original"
+echo ""
+if [ "$UPDATE_MODE" = true ]; then
+    echo -e "${GREEN}🔄 To update again in the future:${NC}"
+else
+    echo -e "${GREEN}🔄 To update in the future:${NC}"
+fi
+echo "  • Pull latest code from git"
+echo "  • Run: sudo ./install.sh"
+echo ""
+echo -e "${GREEN}🚀 Service is ready!${NC}"
