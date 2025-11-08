@@ -97,8 +97,6 @@ func main() {
 			state.SiteStates[site.Address] = &SiteState{
 				Name:         site.Name,
 				Address:      site.Address,
-				MinLatency:   -1,
-				RecentEvents: make([]EventRecord, 0),
 			}
 		}
 	}
@@ -252,15 +250,7 @@ func handleShowStatus(configFile string) {
 		}
 
 		fmt.Printf("  [%s] %s (%s)\n", status, siteState.Name, addr)
-		fmt.Printf("      Checks: %d (Success: %d, Failed: %d)\n",
-			siteState.TotalChecks, siteState.SuccessfulChecks, siteState.FailedChecks)
-
-		if siteState.LastLatency > 0 {
-			fmt.Printf("      Latency: %.2f ms (avg: %.2f, min: %.2f, max: %.2f)\n",
-				siteState.LastLatency, siteState.AverageLatency,
-				siteState.MinLatency, siteState.MaxLatency)
-		}
-
+		
 		if siteState.IsDown {
 			fmt.Printf("      Down Since: %s (%s)\n",
 				formatTimestamp(siteState.DownSince),

@@ -5,25 +5,25 @@ import (
 	"time"
 )
 
-// ServiceState represents the persistent state across restarts
+// ServiceState represents the persistent state across restarts (minimal)
 type ServiceState struct {
 	// Service lifecycle
 	ServiceStartTime       time.Time `json:"service_start_time"`
 	LastShutdownTime       time.Time `json:"last_shutdown_time"`
 	LastSaveTime           time.Time `json:"last_save_time"`
 	
-	// Restart tracking
+	// Restart tracking (essential for cooldown/retry logic)
 	LastRestartAttempt     time.Time `json:"last_restart_attempt"`
 	LastSuccessfulRestart  time.Time `json:"last_successful_restart"`
 	ConsecutiveRestartFails int       `json:"consecutive_restart_fails"`
 	TotalRestarts          int       `json:"total_restarts"`
-	RestartHistory         []RestartRecord `json:"restart_history"`
+	RestartHistory         []RestartRecord `json:"restart_history"` // Last 10-20 restarts
 	
 	// Power loss detection
 	PowerLossSuspected     bool      `json:"power_loss_suspected"`
 	PowerLossDetectedAt    time.Time `json:"power_loss_detected_at"`
 	
-	// Site monitoring state
+	// Site monitoring state (minimal - only current status, not statistics)
 	SiteStates             map[string]*SiteState `json:"site_states"` // key: site address
 	
 	// Cluster state
@@ -32,26 +32,28 @@ type ServiceState struct {
 	mu                     sync.RWMutex `json:"-"`
 }
 
-// SiteState tracks the state of a monitored site
+// SiteState tracks the minimal state of a monitored site (only what's needed across restarts)
 type SiteState struct {
 	Name                string        `json:"name"`
 	Address             string        `json:"address"`
-	IsDown              bool          `json:"is_down"`
-	DownSince           time.Time     `json:"down_since"`
-	LastUpTime          time.Time     `json:"last_up_time"`
-	LastCheckTime       time.Time     `json:"last_check_time"`
-	TotalChecks         int64         `json:"total_checks"`
-	FailedChecks        int64         `json:"failed_checks"`
-	SuccessfulChecks    int64         `json:"successful_checks"`
-	TotalDowntime       time.Duration `json:"total_downtime"`
-	LastLatency         float64       `json:"last_latency_ms"`
-	AverageLatency      float64       `json:"average_latency_ms"`
-	MinLatency          float64       `json:"min_latency_ms"`
-	MaxLatency          float64       `json:"max_latency_ms"`
-	RecentEvents        []EventRecord `json:"recent_events"`
+	IsDown              bool          `json:"is_down"`              // Current up/down status
+	DownSince           time.Time     `json:"down_since"`           // When it went down (for tracking)
+	LastCheckTime       time.Time     `json:"last_check_time"`      // When last checked (to detect staleness)
 }
 
-// EventRecord tracks a monitoring event
+// SiteStats tracks runtime statistics (in-memory only, NOT persisted)
+type SiteStats struct {
+	TotalChecks         int64
+	SuccessfulChecks    int64
+	FailedChecks        int64
+	LastLatency         float64
+	AverageLatency      float64
+	MinLatency          float64
+	MaxLatency          float64
+	mu                  sync.RWMutex
+}
+
+// EventRecord tracks a monitoring event (logged to systemd, not persisted)
 type EventRecord struct {
 	Timestamp   time.Time     `json:"timestamp"`
 	EventType   string        `json:"event_type"` // "site_down", "site_up", "restart_started", "restart_completed", "restart_failed"
@@ -61,7 +63,7 @@ type EventRecord struct {
 	Duration    time.Duration `json:"duration,omitempty"`
 }
 
-// RestartRecord tracks a router restart attempt
+// RestartRecord tracks a router restart attempt (persisted for cooldown logic)
 type RestartRecord struct {
 	Timestamp       time.Time     `json:"timestamp"`
 	Reason          string        `json:"reason"` // "sites_down", "verification_failed", "retry"
@@ -178,7 +180,6 @@ type StatusResponse struct {
 	ClusterEnabled      bool                     `json:"cluster_enabled"`
 	ClusterNodes        map[string]*ClusterNode  `json:"cluster_nodes,omitempty"`
 	ClusterLock         *ClusterLock             `json:"cluster_lock,omitempty"`
-	RecentEvents        []EventRecord            `json:"recent_events"`
 	RestartHistory      []RestartRecord          `json:"restart_history"`
 }
 
@@ -201,4 +202,3 @@ const (
 	EventClusterLockAcquired = "cluster_lock_acquired"
 	EventClusterLockReleased = "cluster_lock_released"
 )
-

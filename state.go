@@ -80,105 +80,69 @@ func LoadState(filepath string) (*ServiceState, error) {
 	
 	var state ServiceState
 	if err := json.Unmarshal(data, &state); err != nil {
-		// Backup corrupted file
+		// Corrupted state - backup and start fresh
 		backupPath := filepath + ".corrupted"
-		if backupErr := os.Rename(filepath, backupPath); backupErr == nil {
+		if err := os.Rename(filepath, backupPath); err == nil {
 			LogWarn("Corrupted state file backed up to: %s", backupPath)
 		}
-		return nil, fmt.Errorf("failed to parse state file (corrupted): %v", err)
+		return NewServiceState(), nil
 	}
 	
 	LogInfo("State loaded from %s (last save: %s)", filepath, formatTimestamp(state.LastSaveTime))
-	
 	return &state, nil
 }
 
-// DetectPowerLoss detects if a power loss occurred based on state
+// DetectPowerLoss checks if there was a power loss based on state
 func DetectPowerLoss(state *ServiceState, gracePeriodMinutes int) bool {
-	if state == nil {
-		return false
-	}
-	
 	state.mu.RLock()
 	defer state.mu.RUnlock()
 	
-	// If this is a fresh start (no previous shutdown time), no power loss
-	if isZeroTime(state.LastShutdownTime) {
+	// If service just started, check last shutdown time
+	serviceRuntime := time.Since(state.ServiceStartTime)
+	
+	// If we've been running for more than grace period, we're past power loss concerns
+	if serviceRuntime > time.Duration(gracePeriodMinutes)*time.Minute {
 		return false
 	}
 	
-	// Calculate time since last shutdown
+	// Check if last shutdown was clean (within reasonable time)
+	if state.LastShutdownTime.IsZero() {
+		// No previous shutdown recorded - could be first run or power loss
+		return false
+	}
+	
+	// If service was shutdown recently (within grace period), it's not a power loss
 	timeSinceShutdown := time.Since(state.LastShutdownTime)
-	
-	// If shutdown was recent (within grace period), consider it a normal restart
-	gracePeriod := time.Duration(gracePeriodMinutes) * time.Minute
-	if timeSinceShutdown < gracePeriod {
-		LogDebug("Recent shutdown detected (%.1f minutes ago), not a power loss", timeSinceShutdown.Minutes())
+	if timeSinceShutdown < time.Duration(gracePeriodMinutes)*time.Minute {
+		// Clean shutdown within grace period
 		return false
 	}
 	
-	// If there's a significant gap, it might be a power loss
-	// But we need to be conservative - could also be a long maintenance window
-	// Check if there was an ongoing restart that was interrupted
-	if !isZeroTime(state.LastRestartAttempt) {
-		timeSinceRestartAttempt := time.Since(state.LastRestartAttempt)
-		
-		// If a restart was attempted recently and we're now starting up,
-		// it could be because the router restart cut our connection/power
-		if timeSinceRestartAttempt < 30*time.Minute {
-			LogWarn("Restart attempt detected %.1f minutes ago - possible power loss during restart", 
-				timeSinceRestartAttempt.Minutes())
-			return true
-		}
-	}
-	
-	// Long shutdown period - likely maintenance or intentional shutdown
-	LogInfo("Long shutdown period detected (%.1f hours) - treating as maintenance", timeSinceShutdown.Hours())
-	return false
+	// Likely a power loss if:
+	// 1. Service just started (within grace period)
+	// 2. Last shutdown was not recent
+	return true
 }
 
-// RecordRestartAttempt records a restart attempt in state
-func RecordRestartAttempt(state *ServiceState, record RestartRecord) {
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	
-	state.LastRestartAttempt = record.Timestamp
-	if record.Success {
-		state.LastSuccessfulRestart = record.Timestamp
-		state.ConsecutiveRestartFails = 0
-	} else {
-		state.ConsecutiveRestartFails++
-	}
-	
-	state.TotalRestarts++
-	state.RestartHistory = append(state.RestartHistory, record)
-	
-	// Keep only last 50 restart records
-	if len(state.RestartHistory) > 50 {
-		state.RestartHistory = state.RestartHistory[len(state.RestartHistory)-50:]
-	}
-}
-
-// RecordEvent records an event in state
+// RecordEvent logs a monitoring event to systemd journal (like ping-monitor)
 func RecordEvent(state *ServiceState, event EventRecord) {
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	
-	// Add to site-specific events if site address is provided
-	if event.SiteAddress != "" {
-		siteState, exists := state.SiteStates[event.SiteAddress]
-		if exists {
-			siteState.RecentEvents = append(siteState.RecentEvents, event)
-			
-			// Keep only last 100 events per site
-			if len(siteState.RecentEvents) > 100 {
-				siteState.RecentEvents = siteState.RecentEvents[len(siteState.RecentEvents)-100:]
-			}
-		}
+	// Events are logged to systemd journal, not saved in state (like ping-monitor)
+	switch event.EventType {
+	case EventSiteDown:
+		LogWarn("Event: %s - %s", event.EventType, event.Message)
+	case EventSiteUp:
+		LogInfo("Event: %s - %s (duration: %s)", event.EventType, event.Message, formatDuration(event.Duration))
+	case EventRestartStarted, EventRestartCompleted:
+		LogInfo("Event: %s - %s", event.EventType, event.Message)
+	case EventRestartFailed:
+		LogError("Event: %s - %s", event.EventType, event.Message)
+	default:
+		LogDebug("Event: %s - %s", event.EventType, event.Message)
 	}
 }
 
-// UpdateSiteState updates the state for a specific site
+// UpdateSiteState updates the minimal persistent state for a site (like ping-monitor)
+// Statistics are tracked in-memory by the Monitor, not persisted here
 func UpdateSiteState(state *ServiceState, site Site, pingResult PingResult) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -186,84 +150,39 @@ func UpdateSiteState(state *ServiceState, site Site, pingResult PingResult) {
 	siteState, exists := state.SiteStates[site.Address]
 	if !exists {
 		siteState = &SiteState{
-			Name:           site.Name,
-			Address:        site.Address,
-			MinLatency:     -1,
-			RecentEvents:   make([]EventRecord, 0),
+			Name:    site.Name,
+			Address: site.Address,
 		}
 		state.SiteStates[site.Address] = siteState
 	}
 	
 	now := time.Now()
 	siteState.LastCheckTime = now
-	siteState.TotalChecks++
 	
 	if pingResult.Success {
-		siteState.SuccessfulChecks++
-		
-		// Update latency stats
+		// Log latency to systemd journal (not stored in state)
 		if pingResult.Latency > 0 {
-			siteState.LastLatency = pingResult.Latency
-			
-			// Update min/max
-			if siteState.MinLatency < 0 || pingResult.Latency < siteState.MinLatency {
-				siteState.MinLatency = pingResult.Latency
-			}
-			if pingResult.Latency > siteState.MaxLatency {
-				siteState.MaxLatency = pingResult.Latency
-			}
-			
-			// Update average (rolling average)
-			if siteState.AverageLatency <= 0 {
-				siteState.AverageLatency = pingResult.Latency
-			} else {
-				// Weighted average: 90% old + 10% new
-				siteState.AverageLatency = siteState.AverageLatency*0.9 + pingResult.Latency*0.1
-			}
+			LogDebug("Site %s: latency=%.2fms, loss=%d%%", getSiteDisplayName(site), pingResult.Latency, pingResult.PacketLoss)
 		}
 		
 		// If site was down, record recovery
 		if siteState.IsDown {
 			downtime := time.Since(siteState.DownSince)
-			siteState.TotalDowntime += downtime
 			siteState.IsDown = false
-			siteState.LastUpTime = now
 			
-			event := EventRecord{
-				Timestamp:   now,
-				EventType:   EventSiteUp,
-				SiteAddress: site.Address,
-				Message:     fmt.Sprintf("Site recovered after %s", formatDuration(downtime)),
-				Duration:    downtime,
-				Latency:     pingResult.Latency,
-			}
-			siteState.RecentEvents = append(siteState.RecentEvents, event)
-			
-			LogInfo("✅ Site %s recovered (downtime: %s)", getSiteDisplayName(site), formatDuration(downtime))
+			// Log recovery to systemd journal
+			LogInfo("✅ Site %s recovered (downtime: %s, latency: %.2fms)", 
+				getSiteDisplayName(site), formatDuration(downtime), pingResult.Latency)
 		}
 	} else {
-		siteState.FailedChecks++
-		
 		// If site just went down, record it
 		if !siteState.IsDown {
 			siteState.IsDown = true
 			siteState.DownSince = now
 			
-			event := EventRecord{
-				Timestamp:   now,
-				EventType:   EventSiteDown,
-				SiteAddress: site.Address,
-				Message:     fmt.Sprintf("Site went down (packet loss: %d%%)", pingResult.PacketLoss),
-			}
-			siteState.RecentEvents = append(siteState.RecentEvents, event)
-			
-			LogWarn("⚠️  Site %s went down", getSiteDisplayName(site))
+			// Log down event to systemd journal
+			LogWarn("⚠️  Site %s went down (packet loss: %d%%)", getSiteDisplayName(site), pingResult.PacketLoss)
 		}
-	}
-	
-	// Keep only last 100 events
-	if len(siteState.RecentEvents) > 100 {
-		siteState.RecentEvents = siteState.RecentEvents[len(siteState.RecentEvents)-100:]
 	}
 }
 
@@ -278,21 +197,45 @@ func CanAttemptRestart(state *ServiceState, cooldownMinutes int, maxRetries int)
 			state.ConsecutiveRestartFails, maxRetries)
 	}
 	
-	// Check cooldown period
-	if !isZeroTime(state.LastRestartAttempt) {
-		timeSinceLastAttempt := time.Since(state.LastRestartAttempt)
-		cooldown := time.Duration(cooldownMinutes) * time.Minute
+	// Check if we're still in cooldown period
+	if !state.LastRestartAttempt.IsZero() {
+		timeSince := time.Since(state.LastRestartAttempt)
+		cooldownDuration := time.Duration(cooldownMinutes) * time.Minute
 		
-		if timeSinceLastAttempt < cooldown {
-			remaining := cooldown - timeSinceLastAttempt
-			return false, fmt.Sprintf("restart cooldown active (%.1f minutes remaining)", remaining.Minutes())
+		if timeSince < cooldownDuration {
+			return false, fmt.Sprintf("cooldown period active (%.0f/%.0f minutes)", 
+				timeSince.Minutes(), cooldownDuration.Minutes())
 		}
 	}
 	
-	return true, ""
+	return true, "restart allowed"
 }
 
-// GetRecentRestarts returns recent restart attempts
+// RecordRestartAttempt records a restart attempt in the state
+func RecordRestartAttempt(state *ServiceState, record RestartRecord) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	
+	state.LastRestartAttempt = record.Timestamp
+	state.TotalRestarts++
+	
+	if record.Success {
+		state.LastSuccessfulRestart = record.Timestamp
+		state.ConsecutiveRestartFails = 0 // Reset on success
+	} else {
+		state.ConsecutiveRestartFails++
+	}
+	
+	// Add to history
+	state.RestartHistory = append(state.RestartHistory, record)
+	
+	// Keep only last 20 restart records
+	if len(state.RestartHistory) > 20 {
+		state.RestartHistory = state.RestartHistory[len(state.RestartHistory)-20:]
+	}
+}
+
+// GetRecentRestarts returns the most recent restart records
 func GetRecentRestarts(state *ServiceState, count int) []RestartRecord {
 	state.mu.RLock()
 	defer state.mu.RUnlock()
@@ -301,15 +244,14 @@ func GetRecentRestarts(state *ServiceState, count int) []RestartRecord {
 		return []RestartRecord{}
 	}
 	
-	startIdx := len(state.RestartHistory) - count
-	if startIdx < 0 {
-		startIdx = 0
+	if count > len(state.RestartHistory) {
+		count = len(state.RestartHistory)
 	}
 	
-	// Return a copy
-	records := make([]RestartRecord, len(state.RestartHistory[startIdx:]))
-	copy(records, state.RestartHistory[startIdx:])
+	// Return last N records
+	start := len(state.RestartHistory) - count
+	records := make([]RestartRecord, count)
+	copy(records, state.RestartHistory[start:])
 	
 	return records
 }
-
