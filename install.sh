@@ -164,6 +164,7 @@ chmod +x restartko
 echo -e "${GREEN}✅ Binary built successfully${NC}"
 
 # Check if raw sockets are enabled in config and grant capability if needed
+echo -e "${GREEN}🔍 Checking configuration...${NC}"
 if [ -f "$INSTALL_DIR/config.json" ]; then
     USE_RAW=$(grep -o '"use_raw_sockets"[[:space:]]*:[[:space:]]*true' "$INSTALL_DIR/config.json")
     if [ -n "$USE_RAW" ]; then
@@ -186,8 +187,6 @@ if [ -f "$INSTALL_DIR/config.json" ]; then
 else
     echo -e "${YELLOW}⚠️  Config file not found, skipping capability grant${NC}"
 fi
-
-echo -e "${GREEN}✅ Service binary built successfully${NC}"
 
 # Create network wait script
 echo -e "${GREEN}📡 Creating network wait script...${NC}"
@@ -274,11 +273,21 @@ EOF
 # Reload systemd and enable service
 echo -e "${GREEN}🔄 Reloading systemd and enabling service...${NC}"
 systemctl daemon-reload
+if [ $? -ne 0 ]; then
+    echo -e "${RED}❌ Failed to reload systemd${NC}"
+    exit 1
+fi
+
 systemctl enable "$SERVICE_NAME"
+if [ $? -ne 0 ]; then
+    echo -e "${RED}❌ Failed to enable service${NC}"
+    exit 1
+fi
 
 echo -e "${GREEN}✅ Service installed and enabled${NC}"
 
 echo ""
+echo -e "${YELLOW}DEBUG: UPDATE_MODE=${UPDATE_MODE}${NC}"
 if [ "$UPDATE_MODE" = true ]; then
     echo -e "${GREEN}🎉 Update completed successfully!${NC}"
     echo "================================================"
