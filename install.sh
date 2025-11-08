@@ -166,14 +166,13 @@ echo -e "${GREEN}✅ Binary built successfully${NC}"
 # Check if raw sockets are enabled in config and grant capability if needed
 echo -e "${GREEN}🔍 Checking configuration...${NC}"
 if [ -f "$INSTALL_DIR/config.json" ]; then
-    USE_RAW=$(grep -o '"use_raw_sockets"[[:space:]]*:[[:space:]]*true' "$INSTALL_DIR/config.json")
+    USE_RAW=$(grep -o '"use_raw_sockets"[[:space:]]*:[[:space:]]*true' "$INSTALL_DIR/config.json" || true)
     if [ -n "$USE_RAW" ]; then
         echo -e "${GREEN}🔐 Raw sockets enabled in config, granting CAP_NET_RAW capability...${NC}"
         setcap cap_net_raw+ep restartko
         if [ $? -eq 0 ]; then
             echo -e "${GREEN}✅ CAP_NET_RAW capability granted${NC}"
-            getcap restartko | grep cap_net_raw > /dev/null
-            if [ $? -eq 0 ]; then
+            if getcap restartko | grep -q cap_net_raw; then
                 echo -e "${GREEN}✅ Capability verified${NC}"
             fi
         else
@@ -220,7 +219,7 @@ chown "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR/wait-for-network.sh"
 # Check if raw sockets are enabled for NoNewPrivileges setting
 NO_NEW_PRIVILEGES="true"
 if [ -f "$INSTALL_DIR/config.json" ]; then
-    USE_RAW_SOCKETS=$(grep -o '"use_raw_sockets"[[:space:]]*:[[:space:]]*true' "$INSTALL_DIR/config.json")
+    USE_RAW_SOCKETS=$(grep -o '"use_raw_sockets"[[:space:]]*:[[:space:]]*true' "$INSTALL_DIR/config.json" || true)
     if [ -n "$USE_RAW_SOCKETS" ]; then
         NO_NEW_PRIVILEGES="false"
         echo -e "${GREEN}ℹ️  Raw sockets enabled - setting NoNewPrivileges=false for capabilities${NC}"
