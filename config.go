@@ -30,6 +30,7 @@ type Config struct {
 	ClusterAPIListen         string   `json:"cluster_api_listen"`
 	ClusterLockTimeoutSeconds int     `json:"cluster_lock_timeout_seconds"` // How long a lock is valid
 	ClusterHealthCheckSeconds int     `json:"cluster_health_check_seconds"` // How often to check other nodes
+	ClusterStaggerSeconds    int      `json:"cluster_stagger_seconds"`     // Stagger ping checks across cluster nodes (0=disabled)
 	
 	// State persistence
 	StateFilePath            string   `json:"state_file_path"`

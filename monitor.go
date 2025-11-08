@@ -131,10 +131,20 @@ func (m *Monitor) Stop() error {
 
 // monitorSiteLoop monitors a single site continuously
 func (m *Monitor) monitorSiteLoop(site Site, verificationSites []Site) {
+	// Apply cluster stagger delay if configured
+	staggerDelay := m.calculateClusterStagger()
+	if staggerDelay > 0 {
+		LogInfo("Applying cluster stagger delay of %d seconds for site: %s", staggerDelay, getSiteDisplayName(site))
+		time.Sleep(time.Duration(staggerDelay) * time.Second)
+	}
+	
 	ticker := time.NewTicker(time.Duration(m.config.PingIntervalSeconds) * time.Second)
 	defer ticker.Stop()
 
 	LogInfo("Started monitoring loop for site: %s", getSiteDisplayName(site))
+	
+	// Perform initial check immediately after stagger delay
+	m.checkSite(site, verificationSites)
 
 	for {
 		select {
@@ -144,6 +154,54 @@ func (m *Monitor) monitorSiteLoop(site Site, verificationSites []Site) {
 			return
 		}
 	}
+}
+
+// calculateClusterStagger calculates the stagger delay for this node
+// Returns the number of seconds to delay before starting monitoring
+func (m *Monitor) calculateClusterStagger() int {
+	// If stagger is disabled or not in cluster mode, return 0
+	if m.config.ClusterStaggerSeconds <= 0 || !m.config.ClusterEnabled {
+		return 0
+	}
+	
+	// If no other nodes configured, no need to stagger
+	if len(m.config.ClusterNodes) == 0 {
+		return 0
+	}
+	
+	// Create a sorted list of all nodes (including this one)
+	allNodes := make([]string, 0, len(m.config.ClusterNodes)+1)
+	allNodes = append(allNodes, m.config.NodeID)
+	allNodes = append(allNodes, m.config.ClusterNodes...)
+	
+	// Sort to ensure consistent ordering across all nodes
+	// Simple bubble sort for deterministic ordering
+	for i := 0; i < len(allNodes); i++ {
+		for j := i + 1; j < len(allNodes); j++ {
+			if allNodes[i] > allNodes[j] {
+				allNodes[i], allNodes[j] = allNodes[j], allNodes[i]
+			}
+		}
+	}
+	
+	// Find this node's position
+	nodePosition := 0
+	for i, node := range allNodes {
+		if node == m.config.NodeID || node == m.config.ClusterAPIListen {
+			nodePosition = i
+			break
+		}
+	}
+	
+	// Calculate stagger: distribute evenly across the stagger window
+	totalNodes := len(allNodes)
+	staggerPerNode := m.config.ClusterStaggerSeconds / totalNodes
+	
+	offset := nodePosition * staggerPerNode
+	
+	LogDebug("Cluster stagger calculation: position=%d/%d, offset=%ds", nodePosition, totalNodes, offset)
+	
+	return offset
 }
 
 // checkSite checks a single site and handles failures

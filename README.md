@@ -252,7 +252,8 @@ Enable cluster mode to run multiple instances with coordination:
   "cluster_api_port": 8080,
   "cluster_api_listen": "0.0.0.0:8080",
   "cluster_lock_timeout_seconds": 300,
-  "cluster_health_check_seconds": 10
+  "cluster_health_check_seconds": 10,
+  "cluster_stagger_seconds": 15
 }
 ```
 
@@ -263,6 +264,7 @@ Enable cluster mode to run multiple instances with coordination:
 - `cluster_api_listen` - Listen address for API (default: "0.0.0.0:8080")
 - `cluster_lock_timeout_seconds` - Lock expiry time (default: 300)
 - `cluster_health_check_seconds` - Health check interval (default: 10)
+- `cluster_stagger_seconds` - Stagger ping checks across nodes to avoid simultaneous checks (0=disabled, recommended: 15-30)
 
 ### DNS Caching
 
@@ -1105,9 +1107,17 @@ Cluster mode allows multiple RestartKO instances to run simultaneously while ens
   "cluster_api_port": 8080,
   "cluster_api_listen": "0.0.0.0:8080",
   "cluster_lock_timeout_seconds": 300,
-  "cluster_health_check_seconds": 10
+  "cluster_health_check_seconds": 10,
+  "cluster_stagger_seconds": 20
 }
 ```
+
+**Cluster Stagger:** With `cluster_stagger_seconds` set to 20 and 3 nodes, checks will be staggered:
+- Node 1: Starts immediately (0s offset)
+- Node 2: Starts after 6s offset (20s / 3 nodes)
+- Node 3: Starts after 13s offset
+
+This prevents all nodes from pinging simultaneously and provides better load distribution.
 
 ### Lock Mechanism
 
