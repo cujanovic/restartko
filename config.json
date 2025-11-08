@@ -1,6 +1,6 @@
 {
   "ping_interval_seconds": 30,
-  "ping_count": 3,
+  "ping_count": 5,
   "ping_timeout_seconds": 10,
   "verification_site_count": 3,
   

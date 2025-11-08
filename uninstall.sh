@@ -52,6 +52,18 @@ if [ -d /var/log/restartko ]; then
     fi
 fi
 
+# Remove service user
+SERVICE_USER="restartko"
+if id "$SERVICE_USER" &>/dev/null; then
+    echo "👤 Removing service user..."
+    read -p "Remove user $SERVICE_USER? (y/N) " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        sudo userdel "$SERVICE_USER" 2>/dev/null
+        echo "✅ Service user removed"
+    fi
+fi
+
 echo ""
 echo "════════════════════════════════════════════"
 echo "  Uninstallation Complete!"

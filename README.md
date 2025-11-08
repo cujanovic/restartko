@@ -1387,36 +1387,98 @@ Still down? → Attempt 2
 
 ## Systemd Service
 
-Create `/etc/systemd/system/restartko.service`:
+The systemd service is automatically created by `install.sh` when you choose to install as a service.
 
+The service includes:
+- ✅ **Dedicated service user** - Runs as `restartko` user (not root) for better security
+- ✅ **Network readiness wait** - Waits for `network-online.target` before starting
+- ✅ **30-second startup delay** - Ensures network is fully initialized after power loss
+- ✅ **Auto-restart** - Automatically restarts if service crashes
+- ✅ **Journal logging** - Logs to systemd journal (compatible with log2ram)
+- ✅ **Security hardening** - NoNewPrivileges, PrivateTmp, ProtectSystem, ProtectHome
+- ✅ **Resource limits** - MemoryMax 256M, LimitNOFILE 65536
+
+**Service configuration:**
 ```ini
 [Unit]
 Description=RestartKO Network Monitor
-After=network.target
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-User=root
+User=restartko
+Group=restartko
 WorkingDirectory=/opt/restartko
+
+# Wait 30 seconds for network to be fully ready after boot
+ExecStartPre=/bin/sleep 30
 ExecStart=/opt/restartko/restartko -config /opt/restartko/config.json
+
+# Auto-restart if service crashes
 Restart=always
 RestartSec=10
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/restartko
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=restartko
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=256M
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-Enable and start:
+**Managing the service:**
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable restartko
+# Start service
 sudo systemctl start restartko
+
+# Stop service
+sudo systemctl stop restartko
+
+# Restart service
+sudo systemctl restart restartko
+
+# Check status
 sudo systemctl status restartko
 
 # View logs
 sudo journalctl -u restartko -f
+
+# View logs since boot
+sudo journalctl -u restartko -b
 ```
+
+**Why the 30-second delay?**
+
+After a power loss, the network interface and router may not be immediately ready:
+1. Network interface initialization takes time
+2. Router may still be booting
+3. DHCP lease acquisition may be in progress
+4. DNS resolution may not be available yet
+
+The 30-second delay (`ExecStartPre=/bin/sleep 30`) ensures the network is fully operational before RestartKO starts monitoring.
+
+**Service User Security:**
+
+The service runs as a dedicated `restartko` system user (not root) for improved security:
+- Automatically created during installation
+- No shell access (`/bin/false`)
+- Limited permissions (only access to `/opt/restartko` and `/var/log/restartko`)
+- CAP_NET_RAW capability granted for raw socket ICMP (if enabled)
 
 ---
 
