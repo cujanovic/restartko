@@ -260,6 +260,25 @@ func (m *Monitor) checkSite(site Site, verificationSites []Site) {
 func (m *Monitor) handleConnectivityFailure(downSites []string) {
 	LogInfo("🔧 Handling connectivity failure...")
 
+	// Apply grace period to allow router self-recovery
+	if m.config.RestartGracePeriodSeconds > 0 {
+		LogInfo("⏳ Applying grace period (%d seconds) to allow router self-recovery...", 
+			m.config.RestartGracePeriodSeconds)
+		time.Sleep(time.Duration(m.config.RestartGracePeriodSeconds) * time.Second)
+		
+		// Re-verify connectivity after grace period
+		LogInfo("🔍 Re-verifying connectivity after grace period...")
+		allSites := m.getAllSites()
+		verifyResult := VerifyConnectivityWithDNS(allSites, m.config.VerificationSiteCount, m.config, m.dnsCache)
+		
+		if !verifyResult.AllDown {
+			LogInfo("✅ Connectivity restored during grace period - router recovered on its own!")
+			return
+		}
+		
+		LogWarn("⚠️  Connectivity still down after grace period - proceeding with restart logic")
+	}
+
 	// Check router uptime for power outage detection
 	if m.config.Router.UptimeCheckEnabled {
 		routerUptime, powerOutageSuspected, err := GetRouterUptime(m.config.Router)

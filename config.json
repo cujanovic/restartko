@@ -5,7 +5,8 @@
   "verification_site_count": 3,
   
   "restart_cooldown_minutes": 15,
-  "restart_wait_seconds": 90,
+  "restart_grace_period_seconds": 60,
+  "restart_wait_seconds": 180,
   "restart_max_retries": 3,
   "restart_retry_delay_minutes": 10,
   "post_restart_ping_count": 5,

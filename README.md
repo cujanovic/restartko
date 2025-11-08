@@ -224,7 +224,8 @@ For **generic HTTP routers**:
 ```json
 {
   "restart_cooldown_minutes": 15,
-  "restart_wait_seconds": 90,
+  "restart_grace_period_seconds": 60,
+  "restart_wait_seconds": 180,
   "restart_max_retries": 3,
   "restart_retry_delay_minutes": 10,
   "post_restart_ping_count": 5
@@ -232,7 +233,8 @@ For **generic HTTP routers**:
 ```
 
 - `restart_cooldown_minutes` - Minimum time between restart attempts (default: 15)
-- `restart_wait_seconds` - Wait time after restart before verification (default: 90)
+- `restart_grace_period_seconds` - Wait time before restart to allow router self-recovery (default: 60)
+- `restart_wait_seconds` - Wait time after restart before verification (default: 180)
 - `restart_max_retries` - Maximum consecutive restart attempts (default: 3)
 - `restart_retry_delay_minutes` - Delay between retry attempts (default: 10)
 - `post_restart_ping_count` - Number of pings for verification (default: 5)
@@ -1339,6 +1341,17 @@ Multiple sites down? ─── No ──► Continue monitoring
       Yes
        │
        ▼
+Wait grace period (60s)
+       │
+       ▼
+Re-verify connectivity
+       │
+       ▼
+Still down? ─── No ──► Router recovered on its own!
+       │
+      Yes
+       │
+       ▼
 Check restart cooldown
        │
        ▼
@@ -1381,6 +1394,15 @@ Release lock, reset counters
 ```
 
 ### Cooldown and Retry Logic
+
+**Grace Period**: Allow router self-recovery before restart
+```
+Connectivity failure detected
+Wait: 60 seconds (configurable)
+Re-verify connectivity
+If restored → No restart needed!
+If still down → Proceed with restart logic
+```
 
 **Cooldown**: Minimum time between restart attempts
 ```

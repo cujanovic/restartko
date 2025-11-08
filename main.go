@@ -56,8 +56,11 @@ func main() {
 	if config.StateSaveIntervalSeconds <= 0 {
 		config.StateSaveIntervalSeconds = 30
 	}
+	if config.RestartGracePeriodSeconds <= 0 {
+		config.RestartGracePeriodSeconds = 60
+	}
 	if config.RestartWaitSeconds <= 0 {
-		config.RestartWaitSeconds = 60
+		config.RestartWaitSeconds = 180
 	}
 	if config.PostRestartPingCount <= 0 {
 		config.PostRestartPingCount = 3

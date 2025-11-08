@@ -16,11 +16,12 @@ type Config struct {
 	VerificationSiteCount    int      `json:"verification_site_count"` // Number of other sites to check when one is down
 	
 	// Restart settings
-	RestartCooldownMinutes   int      `json:"restart_cooldown_minutes"`   // Minimum time between restart attempts
-	RestartWaitSeconds       int      `json:"restart_wait_seconds"`       // Wait time after restart before verification
-	RestartMaxRetries        int      `json:"restart_max_retries"`        // Max consecutive restart attempts
-	RestartRetryDelayMinutes int      `json:"restart_retry_delay_minutes"` // Delay between retry attempts
-	PostRestartPingCount     int      `json:"post_restart_ping_count"`    // Number of verification pings after restart
+	RestartCooldownMinutes       int      `json:"restart_cooldown_minutes"`       // Minimum time between restart attempts
+	RestartGracePeriodSeconds    int      `json:"restart_grace_period_seconds"`   // Wait time before restart to allow router self-recovery
+	RestartWaitSeconds           int      `json:"restart_wait_seconds"`           // Wait time after restart before verification
+	RestartMaxRetries            int      `json:"restart_max_retries"`            // Max consecutive restart attempts
+	RestartRetryDelayMinutes     int      `json:"restart_retry_delay_minutes"`    // Delay between retry attempts
+	PostRestartPingCount         int      `json:"post_restart_ping_count"`        // Number of verification pings after restart
 	
 	// Cluster settings
 	ClusterEnabled           bool     `json:"cluster_enabled"`
