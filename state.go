@@ -123,21 +123,24 @@ func DetectPowerLoss(state *ServiceState, config *Config) bool {
 	// Check router uptime to distinguish between power loss and manual service restart
 	// If router has been up longer than the service downtime, it's just a service restart
 	routerUptime, _, err := GetRouterUptime(config.Router)
+	LogInfo("Power loss check: service downtime=%v, router uptime=%v, err=%v", 
+		timeSinceShutdown, routerUptime, err)
+	
 	if err == nil && routerUptime > 0 {
 		// Router uptime is available
 		if routerUptime > timeSinceShutdown {
 			// Router has been up longer than service was down
 			// This means only the service was restarted, not the router/power
-			LogDebug("Router uptime (%v) > service downtime (%v), not a power loss", 
+			LogInfo("✅ Router uptime (%v) > service downtime (%v) - NOT a power loss (manual service restart)", 
 				routerUptime, timeSinceShutdown)
 			return false
 		}
 		// Router uptime is less than service downtime - likely a power loss
-		LogDebug("Router uptime (%v) < service downtime (%v), likely power loss", 
+		LogWarn("⚠️ Router uptime (%v) < service downtime (%v) - likely power loss", 
 			routerUptime, timeSinceShutdown)
 	} else {
 		// Could not get router uptime, fall back to time-based detection
-		LogDebug("Could not determine router uptime, using time-based power loss detection")
+		LogWarn("⚠️ Could not determine router uptime (err=%v) - using time-based power loss detection", err)
 	}
 	
 	// Likely a power loss if:
