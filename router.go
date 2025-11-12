@@ -527,6 +527,15 @@ func GetRouterUptime(config RouterConfig) (time.Duration, bool, error) {
 		req.Header.Set(key, value)
 	}
 	
+	// Debug: Log cookies being sent
+	if parsedURL, err := url.Parse(config.UptimeCheckURL); err == nil {
+		cookies := jar.Cookies(parsedURL)
+		LogDebug("Cookies for uptime request (%s): %d cookies", config.UptimeCheckURL, len(cookies))
+		for _, cookie := range cookies {
+			LogDebug("  - %s=%s", cookie.Name, cookie.Value)
+		}
+	}
+	
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, false, fmt.Errorf("failed to fetch uptime page: %v", err)
