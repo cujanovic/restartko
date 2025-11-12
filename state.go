@@ -138,16 +138,17 @@ func DetectPowerLoss(state *ServiceState, config *Config) bool {
 		// Router uptime is less than service downtime - likely a power loss
 		LogWarn("⚠️ Router uptime (%v) < service downtime (%v) - likely power loss", 
 			routerUptime, timeSinceShutdown)
-	} else {
-		// Could not get router uptime, fall back to time-based detection
-		LogWarn("⚠️ Could not determine router uptime (err=%v) - using time-based power loss detection", err)
+		return true
 	}
 	
-	// Likely a power loss if:
-	// 1. Service just started (within grace period)
-	// 2. Last shutdown was not recent
-	// 3. Router uptime (if available) is less than service downtime
-	return true
+	// Could not get router uptime - skip power loss detection to avoid false positives
+	// This happens when:
+	// 1. uptime_check_enabled is false
+	// 2. Router doesn't support uptime checking
+	// 3. HTML parsing failed
+	LogInfo("⚠️ Router uptime unavailable (err=%v) - skipping power loss detection to avoid false positives", err)
+	LogInfo("✅ Manual service restarts will proceed without delay (enable uptime_check for power loss detection)")
+	return false
 }
 
 // RecordEvent logs a monitoring event to systemd journal (like ping-monitor)

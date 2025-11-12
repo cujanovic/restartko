@@ -340,20 +340,25 @@ Benefits:
   "router": {
     "uptime_check_enabled": true,
     "uptime_check_url": "http://192.168.0.1/st_gateway.html",
-    "uptime_pattern": ""
+    "uptime_pattern": "atg_system_uptime"
   }
 }
 ```
 
 - `uptime_check_enabled` - Enable router uptime checking (default: false)
 - `uptime_check_url` - URL to fetch router uptime from (e.g., status/info page)
-- `uptime_pattern` - Optional: Custom regex pattern to extract uptime (auto-detects if empty)
+- `uptime_pattern` - Optional: Custom pattern to extract uptime (auto-detects if empty)
+  - **HTML attribute mode**: Simple string like `"atg_system_uptime"` → Matches `data-i18n="atg_system_uptime"`
+  - **Regex mode**: Pattern with special chars like `"uptime.*?(\\d+ days)"` → Extracts via regex
+  - **Empty string**: Uses automatic detection with multiple fallback strategies
 
 **Benefits:**
 - **Accurate power outage detection**: Checks router's actual uptime instead of relying only on service uptime
 - **Prevents unnecessary restarts**: If router uptime is < 10 minutes when connectivity fails, it's likely a power outage
+- **Smart pattern matching**: Supports both HTML attribute selectors and regex patterns
 - **Automatic parsing**: Uses proper HTML parsing (goquery) for reliable extraction
 - **Multiple extraction strategies**: 
+  - Custom `uptime_pattern` (HTML attribute or regex)
   - Finds table cells with `data-i18n` attributes containing "uptime"
   - Searches for `<th>` elements with "uptime" text and extracts adjacent `<td>` values
   - Pattern matching for common uptime formats
@@ -361,7 +366,18 @@ Benefits:
 - **Works with most routers**: Any status page showing system uptime can be used
 
 **Example for Technicolor routers:**
-The `st_gateway.html` page shows "System Uptime" in a table with `data-i18n="atg_system_uptime"`, which RestartKO automatically parses using HTML parsing.
+The `st_gateway.html` page shows "System Uptime" in a table:
+```html
+<th data-i18n="atg_system_uptime"></th>
+<td>29 days 15h:41m:18s</td>
+```
+
+To reliably parse this, set:
+```json
+"uptime_pattern": "atg_system_uptime"
+```
+
+This targets the specific `data-i18n` attribute for more reliable parsing than generic auto-detection.
 
 ### Sites Configuration
 
@@ -1210,9 +1226,11 @@ If gap > grace_period → Power loss suspected
 
 Power loss detection uses multiple signals to avoid false positives:
 
-1. **Time-based check**: Service downtime > grace period (default: 5 min)
-2. **Router uptime check**: If router uptime < service downtime → power loss
-3. **Smart logic**: If router uptime > service downtime → just a service restart (no action)
+1. **Quick restart check**: Service downtime < 5 min → **Skip detection** (assumed clean restart)
+2. **Router uptime check** (if enabled):
+   - Router uptime > service downtime → **No power loss** (just service restart)
+   - Router uptime < service downtime → **Power loss detected** (router rebooted)
+3. **Fallback** (if uptime check disabled/failed): **Skip detection** to avoid false positives
 
 When **actual power loss** is detected:
 
@@ -1224,8 +1242,12 @@ When **actual power loss** is detected:
 This gives the router time to fully boot before monitoring begins.
 
 **Example scenarios:**
-- ✅ Router uptime: 29 days, Service downtime: 16 min → **No power loss** (manual restart)
-- ❌ Router uptime: 2 min, Service downtime: 30 min → **Power loss detected** (router rebooted)
+- ✅ Service downtime: 2 min → **No check** (quick restart)
+- ✅ Service downtime: 16 min, Router uptime: 29 days → **No power loss** (manual restart)
+- ❌ Service downtime: 30 min, Router uptime: 2 min → **Power loss detected** (router rebooted)
+- ✅ Service downtime: 19 min, uptime_check disabled → **No check** (avoid false positive)
+
+**Important:** Enable `uptime_check_enabled` for accurate power loss detection. Without it, power loss detection is disabled to prevent false positives on manual restarts.
 
 ---
 

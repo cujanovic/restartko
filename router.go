@@ -565,8 +565,42 @@ func GetRouterUptime(config RouterConfig) (time.Duration, bool, error) {
 func parseRouterUptime(html string, customPattern string) (time.Duration, error) {
 	var uptimeStr string
 	
-	// Use custom regex pattern if provided (fallback to regex for custom patterns)
+	// Use custom pattern if provided
+	// Supports two modes:
+	// 1. HTML attribute value (e.g., "atg_system_uptime") - looks for data-i18n="atg_system_uptime"
+	// 2. Regex pattern (e.g., "uptime.*?(\d+\s+days)") - extracts via regex
 	if customPattern != "" {
+		// First, try as HTML attribute selector (no special regex chars)
+		// If pattern looks like a simple identifier, treat it as data-i18n value
+		if !strings.ContainsAny(customPattern, ".*+?[](){}^$|\\") {
+			LogDebug("Using custom pattern as HTML attribute selector: %s", customPattern)
+			doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+			if err == nil {
+				// Look for data-i18n attribute matching the pattern
+				doc.Find("[data-i18n]").Each(func(i int, s *goquery.Selection) {
+					if uptimeStr != "" {
+						return
+					}
+					if dataI18n, exists := s.Attr("data-i18n"); exists {
+						if dataI18n == customPattern || strings.Contains(dataI18n, customPattern) {
+							// Found the element, get the next td or the content
+							nextTd := s.Next()
+							if nextTd.Length() > 0 && nextTd.Is("td") {
+								uptimeStr = strings.TrimSpace(nextTd.Text())
+								LogDebug("Found uptime using attribute selector [data-i18n='%s']: %s", customPattern, uptimeStr)
+							}
+						}
+					}
+				})
+				
+				if uptimeStr != "" {
+					return parseUptimeString(uptimeStr)
+				}
+			}
+		}
+		
+		// Fallback to regex pattern matching
+		LogDebug("Using custom pattern as regex: %s", customPattern)
 		re, err := regexp.Compile(customPattern)
 		if err != nil {
 			return 0, fmt.Errorf("invalid uptime pattern: %v", err)
@@ -578,7 +612,7 @@ func parseRouterUptime(html string, customPattern string) (time.Duration, error)
 		}
 		
 		if uptimeStr != "" {
-			LogDebug("Found uptime string using custom pattern: %s", uptimeStr)
+			LogDebug("Found uptime string using custom regex pattern: %s", uptimeStr)
 			return parseUptimeString(uptimeStr)
 		}
 	}
@@ -588,6 +622,13 @@ func parseRouterUptime(html string, customPattern string) (time.Duration, error)
 	if err != nil {
 		return 0, fmt.Errorf("failed to parse HTML: %v", err)
 	}
+	
+	// Debug: Log a sample of the HTML to see what we're working with
+	htmlPreview := html
+	if len(html) > 500 {
+		htmlPreview = html[:500] + "..."
+	}
+	LogDebug("HTML preview: %s", htmlPreview)
 	
 	// Strategy 1: Look for table cells with uptime-related attributes or content
 	// Common patterns: data-i18n="*uptime*", text containing "uptime", etc.
@@ -652,15 +693,33 @@ func parseRouterUptime(html string, customPattern string) (time.Duration, error)
 	// Strategy 3: Fallback to searching entire text content
 	if uptimeStr == "" {
 		bodyText := doc.Find("body").Text()
+		LogDebug("Strategy 3: Searching body text for uptime pattern (text length: %d)", len(bodyText))
+		
 		// Look for uptime pattern in text
 		uptimeRe := regexp.MustCompile(`(\d+\s+days?\s+\d+h:\d+m:\d+s|\d+h:\d+m:\d+s)`)
 		matches := uptimeRe.FindStringSubmatch(bodyText)
 		if len(matches) > 1 {
 			uptimeStr = strings.TrimSpace(matches[1])
+			LogDebug("Strategy 3: Found uptime via regex: %s", uptimeStr)
+		} else {
+			LogDebug("Strategy 3: No match found with regex")
+			// Try a more lenient pattern
+			uptimeRe2 := regexp.MustCompile(`(\d+\s+day[s]?\s+\d+h:\d+m:\d+s)`)
+			matches2 := uptimeRe2.FindStringSubmatch(bodyText)
+			if len(matches2) > 1 {
+				uptimeStr = strings.TrimSpace(matches2[1])
+				LogDebug("Strategy 3: Found uptime via lenient regex: %s", uptimeStr)
+			}
 		}
 	}
 	
 	if uptimeStr == "" {
+		LogWarn("Failed to find uptime in HTML after all strategies")
+		// Log some of the body text to help debug
+		bodyText := doc.Find("body").Text()
+		if len(bodyText) > 200 {
+			LogDebug("Body text sample: %s", bodyText[:200])
+		}
 		return 0, fmt.Errorf("uptime not found in HTML")
 	}
 	

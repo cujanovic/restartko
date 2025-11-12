@@ -93,7 +93,7 @@
     
     "uptime_check_enabled": false,
     "uptime_check_url": "",
-    "uptime_pattern": "",
+    "uptime_pattern": "atg_system_uptime",
     
     "port": 22,
     "restart_command": "reboot",
