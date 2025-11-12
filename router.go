@@ -162,8 +162,8 @@ func loginRouterHTTP(client *http.Client, config RouterConfig) error {
 	// Read response body (some routers require this)
 	io.Copy(io.Discard, resp.Body)
 
-	// Check response status
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	// Check response status (accept 2xx and 3xx as success, since redirects are common for logins)
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
 		return fmt.Errorf("login failed with status code: %d", resp.StatusCode)
 	}
 	
@@ -174,13 +174,21 @@ func loginRouterHTTP(client *http.Client, config RouterConfig) error {
 		LogDebug("  Login cookie: %s=%s (Domain: %s, Path: %s)", cookie.Name, cookie.Value, cookie.Domain, cookie.Path)
 	}
 
+	// Debug: Log all cookies in the jar for this URL
+	parsedURL, _ := url.Parse(config.LoginURL)
+	jarCookies := client.Jar.Cookies(parsedURL)
+	LogDebug("Cookies in jar after login for %s: %d cookies", parsedURL.Host, len(jarCookies))
+	for _, cookie := range jarCookies {
+		LogDebug("  Jar cookie: %s=%s (Path: %s)", cookie.Name, cookie.Value, cookie.Path)
+	}
+
 	// Check for session cookie if specified
 	if config.SessionCookieName != "" {
 		found := false
-		for _, cookie := range resp.Cookies() {
+		for _, cookie := range jarCookies {
 			if cookie.Name == config.SessionCookieName {
 				found = true
-				LogDebug("Session cookie found: %s", cookie.Name)
+				LogDebug("Session cookie found in jar: %s", cookie.Name)
 				break
 			}
 		}
@@ -520,6 +528,15 @@ func GetRouterUptime(config RouterConfig) (time.Duration, bool, error) {
 			// Continue anyway - the page might be accessible without login
 		} else {
 			LogInfo("✅ Login successful")
+			
+			// Debug: Log cookies in jar after login for uptime URL
+			if parsedURL, err := url.Parse(config.UptimeCheckURL); err == nil {
+				jarCookies := jar.Cookies(parsedURL)
+				LogDebug("Cookies in jar after login for uptime URL (%s): %d cookies", parsedURL.Host, len(jarCookies))
+				for _, cookie := range jarCookies {
+					LogDebug("  Jar cookie: %s=%s (Path: %s)", cookie.Name, cookie.Value, cookie.Path)
+				}
+			}
 		}
 	}
 	
@@ -534,10 +551,10 @@ func GetRouterUptime(config RouterConfig) (time.Duration, bool, error) {
 		req.Header.Set(key, value)
 	}
 	
-	// Debug: Log cookies being sent
+	// Debug: Log cookies being sent with request
 	if parsedURL, err := url.Parse(config.UptimeCheckURL); err == nil {
 		cookies := jar.Cookies(parsedURL)
-		LogDebug("Cookies for uptime request (%s): %d cookies", config.UptimeCheckURL, len(cookies))
+		LogDebug("Cookies being sent with uptime request (%s): %d cookies", config.UptimeCheckURL, len(cookies))
 		for _, cookie := range cookies {
 			LogDebug("  - %s=%s", cookie.Name, cookie.Value)
 		}
