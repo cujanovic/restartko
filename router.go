@@ -166,6 +166,13 @@ func loginRouterHTTP(client *http.Client, config RouterConfig) error {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("login failed with status code: %d", resp.StatusCode)
 	}
+	
+	// Debug: Log cookies received from login response
+	loginCookies := resp.Cookies()
+	LogDebug("Login response status: %d, cookies received: %d", resp.StatusCode, len(loginCookies))
+	for _, cookie := range loginCookies {
+		LogDebug("  Login cookie: %s=%s (Domain: %s, Path: %s)", cookie.Name, cookie.Value, cookie.Domain, cookie.Path)
+	}
 
 	// Check for session cookie if specified
 	if config.SessionCookieName != "" {
