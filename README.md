@@ -1208,14 +1208,24 @@ If gap > grace_period → Power loss suspected
 
 ### Behavior
 
-When power loss is detected:
+Power loss detection uses multiple signals to avoid false positives:
+
+1. **Time-based check**: Service downtime > grace period (default: 5 min)
+2. **Router uptime check**: If router uptime < service downtime → power loss
+3. **Smart logic**: If router uptime > service downtime → just a service restart (no action)
+
+When **actual power loss** is detected:
 
 1. **Log Warning**: "⚡ Power loss detected!"
-2. **Wait**: Delay for configured minutes
+2. **Wait**: Delay for configured minutes (default: 2 min)
 3. **Resume**: Continue normal monitoring
 4. **State**: Mark in state file
 
 This gives the router time to fully boot before monitoring begins.
+
+**Example scenarios:**
+- ✅ Router uptime: 29 days, Service downtime: 16 min → **No power loss** (manual restart)
+- ❌ Router uptime: 2 min, Service downtime: 30 min → **Power loss detected** (router rebooted)
 
 ---
 

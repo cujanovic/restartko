@@ -60,7 +60,7 @@ func (m *Monitor) Start() error {
 	}
 
 	// Check for power loss
-	if DetectPowerLoss(m.state, m.config.PowerLossGracePeriodMinutes) {
+	if DetectPowerLoss(m.state, &m.config) {
 		LogWarn("⚡ Power loss detected! Waiting %d minutes before resuming normal operations...", 
 			m.config.PowerLossRestartDelayMinutes)
 		
