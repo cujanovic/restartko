@@ -22,6 +22,7 @@ RestartKO is a robust Golang service that monitors internet connectivity by ping
   - [Restart Settings](#restart-settings)
   - [Cluster Settings](#cluster-settings)
   - [DNS Caching](#dns-caching)
+  - [Logging](#logging)
   - [Power Loss Handling](#power-loss-handling)
   - [Sites Configuration](#sites-configuration)
 - [Site Monitoring Recommendations](#site-monitoring-recommendations)
@@ -312,6 +313,42 @@ Benefits:
 **When to use:**
 - `false` (default): Uses unprivileged mode, works without special permissions
 - `true`: Better performance but requires elevated privileges
+
+### Logging
+
+```json
+{
+  "log_level": "info",
+  "log_successful_pings": false
+}
+```
+
+- `log_level` - Logging verbosity: `debug`, `info`, `warn`, `error` (default: `info`)
+- `log_successful_pings` - Log successful ping results (default: `true`)
+
+**Log levels:**
+- `debug` - All messages including internal operations, HTML parsing, cookie details
+- `info` - Normal operations, successful pings, warnings, errors
+- `warn` - Warnings and errors only
+- `error` - Errors only
+
+**About `log_successful_pings`:**
+- `true` (default) - Logs every successful ping with latency and packet loss
+- `false` - Quieter logs, only shows warnings, errors, and state changes (site down/recovery)
+
+**Example with quiet logs:**
+```json
+{
+  "log_level": "info",
+  "log_successful_pings": false
+}
+```
+
+This will suppress the constant "✓ Site - latency: X ms" messages while still showing:
+- ✗ Ping failures
+- 🟢 Site recovery events
+- ⚠️ Warnings and errors
+- 🔄 Router restart attempts
 
 ### Power Loss Handling
 

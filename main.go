@@ -62,6 +62,11 @@ func main() {
 	if config.RestartWaitSeconds <= 0 {
 		config.RestartWaitSeconds = 180
 	}
+	// Default log_successful_pings to true for backwards compatibility
+	if config.LogSuccessfulPings == nil {
+		trueVal := true
+		config.LogSuccessfulPings = &trueVal
+	}
 	if config.PostRestartPingCount <= 0 {
 		config.PostRestartPingCount = 3
 	}

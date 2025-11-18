@@ -50,6 +50,7 @@ type Config struct {
 	
 	// Logging
 	LogLevel                 string   `json:"log_level"` // debug, info, warn, error
+	LogSuccessfulPings       *bool    `json:"log_successful_pings,omitempty"` // Log successful ping results (default: true)
 	
 	// Sites to monitor
 	Sites                    []Site   `json:"sites"`

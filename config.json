@@ -31,6 +31,7 @@
   "use_raw_sockets": true,
   
   "log_level": "info",
+  "log_successful_pings": true,
   
   "sites": [
     {

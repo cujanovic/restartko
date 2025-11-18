@@ -170,7 +170,7 @@ func RecordEvent(state *ServiceState, event EventRecord) {
 
 // UpdateSiteState updates the minimal persistent state for a site (like ping-monitor)
 // Statistics are tracked in-memory by the Monitor, not persisted here
-func UpdateSiteState(state *ServiceState, site Site, pingResult PingResult) {
+func UpdateSiteState(state *ServiceState, site Site, pingResult PingResult, logSuccessfulPings bool) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	
@@ -187,13 +187,15 @@ func UpdateSiteState(state *ServiceState, site Site, pingResult PingResult) {
 	siteState.LastCheckTime = now
 	
 	if pingResult.Success {
-		// Log every successful ping to systemd journal (like ping-monitor)
-		if pingResult.Latency > 0 {
-			LogInfo("✓ %s - latency: %.2fms, packet loss: %d%%", 
-				getSiteDisplayName(site), pingResult.Latency, pingResult.PacketLoss)
-		} else {
-			// Edge case: successful ping but no latency data
-			LogInfo("✓ %s - up (no latency data)", getSiteDisplayName(site))
+		// Log successful pings only if enabled in config
+		if logSuccessfulPings {
+			if pingResult.Latency > 0 {
+				LogInfo("✓ %s - latency: %.2fms, packet loss: %d%%", 
+					getSiteDisplayName(site), pingResult.Latency, pingResult.PacketLoss)
+			} else {
+				// Edge case: successful ping but no latency data
+				LogInfo("✓ %s - up (no latency data)", getSiteDisplayName(site))
+			}
 		}
 		
 		// If site was down, record recovery

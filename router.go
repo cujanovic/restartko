@@ -128,16 +128,19 @@ func loginRouterHTTP(client *http.Client, config RouterConfig) error {
 	var req *http.Request
 	var err error
 
+	encodedFormData := formData.Encode()
+	LogDebug("Login form data being sent: %s", encodedFormData)
+
 	if strings.ToUpper(config.LoginMethod) == "GET" {
 		// GET request with query parameters
 		loginURL := config.LoginURL
 		if len(formData) > 0 {
-			loginURL += "?" + formData.Encode()
+			loginURL += "?" + encodedFormData
 		}
 		req, err = http.NewRequest("GET", loginURL, nil)
 	} else {
 		// POST request with form data
-		req, err = http.NewRequest("POST", config.LoginURL, strings.NewReader(formData.Encode()))
+		req, err = http.NewRequest("POST", config.LoginURL, strings.NewReader(encodedFormData))
 		if err == nil {
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		}

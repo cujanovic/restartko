@@ -229,7 +229,7 @@ func (m *Monitor) checkSite(site Site, verificationSites []Site) {
 	result := PingSiteWithDNS(site, m.config.PingCount, m.config.PingTimeoutSeconds, m.dnsCache, m.config.UseRawSockets)
 
 	// Update state (this will log the ping result to systemd)
-	UpdateSiteState(m.state, site, result)
+	UpdateSiteState(m.state, site, result, *m.config.LogSuccessfulPings)
 
 	// If site is up, nothing to do
 	if result.Success && result.PacketLoss < 50 {
