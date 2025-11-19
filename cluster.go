@@ -106,22 +106,37 @@ func (cm *ClusterManager) healthCheckLoop() {
 
 // checkClusterHealth checks health of all cluster nodes
 func (cm *ClusterManager) checkClusterHealth() {
-	cm.clusterStatus.mu.Lock()
-	defer cm.clusterStatus.mu.Unlock()
+	// Collect node URLs without holding lock during HTTP calls
+	cm.clusterStatus.mu.RLock()
+	nodeChecks := make(map[string]string, len(cm.clusterStatus.Nodes))
+	for nodeID, node := range cm.clusterStatus.Nodes {
+		nodeChecks[nodeID] = node.URL
+	}
+	cm.clusterStatus.mu.RUnlock()
 
-	for _, node := range cm.clusterStatus.Nodes {
-		// Check node health via HTTP
-		healthy := cm.checkNodeHealth(node.URL)
-		node.IsHealthy = healthy
-		node.IsActive = healthy
-		node.LastHealthCheck = time.Now()
-
+	// Perform health checks without lock (HTTP calls can be slow)
+	healthResults := make(map[string]bool, len(nodeChecks))
+	for nodeID, nodeURL := range nodeChecks {
+		healthy := cm.checkNodeHealth(nodeURL)
+		healthResults[nodeID] = healthy
+		
 		if !healthy {
-			LogDebug("Node %s is unhealthy", node.NodeID)
+			LogDebug("Node %s is unhealthy", nodeID)
 		}
 	}
 
-	cm.clusterStatus.LastUpdated = time.Now()
+	// Update results under lock
+	cm.clusterStatus.mu.Lock()
+	now := time.Now()
+	for nodeID, healthy := range healthResults {
+		if node, exists := cm.clusterStatus.Nodes[nodeID]; exists {
+			node.IsHealthy = healthy
+			node.IsActive = healthy
+			node.LastHealthCheck = now
+		}
+	}
+	cm.clusterStatus.LastUpdated = now
+	cm.clusterStatus.mu.Unlock()
 }
 
 // checkNodeHealth checks if a node is healthy

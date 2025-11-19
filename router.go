@@ -163,7 +163,9 @@ func loginRouterHTTP(client *http.Client, config RouterConfig) error {
 	defer resp.Body.Close()
 
 	// Read response body (some routers require this)
-	io.Copy(io.Discard, resp.Body)
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		LogDebug("Failed to read login response body: %v", err)
+	}
 
 	// Check response status (accept 2xx and 3xx as success, since redirects are common for logins)
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
@@ -357,7 +359,9 @@ func sendRestartCommandHTTP(client *http.Client, config RouterConfig, csrfToken 
 	defer resp.Body.Close()
 
 	// Read response body
-	io.Copy(io.Discard, resp.Body)
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		LogDebug("Failed to read restart response body: %v", err)
+	}
 
 	// Check response status (be lenient - some routers disconnect before responding)
 	if resp.StatusCode >= 400 && resp.StatusCode < 600 {
@@ -657,6 +661,11 @@ func parseRouterUptime(html string, customPattern string) (time.Duration, error)
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
 		return 0, fmt.Errorf("failed to parse HTML: %v", err)
+	}
+	
+	// Verify document is valid
+	if doc == nil {
+		return 0, fmt.Errorf("HTML document is nil after parsing")
 	}
 	
 	// Debug: Log a sample of the HTML to see what we're working with

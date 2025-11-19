@@ -185,14 +185,7 @@ func (m *Monitor) calculateClusterStagger() int {
 	}
 	
 	// Sort to ensure consistent ordering across all nodes
-	// Simple bubble sort for deterministic ordering
-	for i := 0; i < len(allNodeIDs); i++ {
-		for j := i + 1; j < len(allNodeIDs); j++ {
-			if allNodeIDs[i] > allNodeIDs[j] {
-				allNodeIDs[i], allNodeIDs[j] = allNodeIDs[j], allNodeIDs[i]
-			}
-		}
-	}
+	sort.Strings(allNodeIDs)
 	
 	// Find this node's position
 	nodePosition := -1

@@ -59,10 +59,10 @@ func PingSiteWithDNS(site Site, count int, timeoutSeconds int, dnsCache *DNSCach
 	packetsRecv := stats.PacketsRecv
 	packetsSent := stats.PacketsSent
 
-	// Calculate packet loss
+	// Calculate packet loss (use float to preserve precision before converting to int)
 	var packetLossPercent int
 	if packetsSent > 0 {
-		packetLossPercent = int(100 * (packetsSent - packetsRecv) / packetsSent)
+		packetLossPercent = int(100 * float64(packetsSent-packetsRecv) / float64(packetsSent))
 	} else {
 		packetLossPercent = 100
 	}

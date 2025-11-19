@@ -79,6 +79,25 @@ func main() {
 	if config.ClusterHealthCheckSeconds <= 0 {
 		config.ClusterHealthCheckSeconds = 10
 	}
+	
+	// Router type-specific defaults
+	switch config.Router.Type {
+	case "generic_http":
+		if config.Router.LoginMethod == "" {
+			config.Router.LoginMethod = "POST"
+		}
+		if config.Router.RestartMethod == "" {
+			config.Router.RestartMethod = "POST"
+		}
+	case "ssh":
+		if config.Router.Port <= 0 {
+			config.Router.Port = 22 // Default SSH port
+		}
+	case "telnet":
+		if config.Router.Port <= 0 {
+			config.Router.Port = 23 // Default Telnet port
+		}
+	}
 
 	// Validate configuration
 	if err := ValidateConfig(config); err != nil {

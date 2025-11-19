@@ -24,16 +24,29 @@ func SaveState(state *ServiceState, filepath string) error {
 		return fmt.Errorf("state file path is empty")
 	}
 	
+	// Update timestamps and create a deep copy under a single lock
 	state.mu.Lock()
-	state.LastSaveTime = time.Now()
-	state.LastShutdownTime = time.Now() // Update on every save
+	now := time.Now()
+	state.LastSaveTime = now
+	state.LastShutdownTime = now // Update on every save
+	
+	// Create a copy of the state for marshaling (to avoid holding lock during I/O)
+	stateCopy := *state
+	stateCopy.SiteStates = make(map[string]*SiteState, len(state.SiteStates))
+	for k, v := range state.SiteStates {
+		siteCopy := *v
+		stateCopy.SiteStates[k] = &siteCopy
+	}
+	stateCopy.RestartHistory = make([]RestartRecord, len(state.RestartHistory))
+	copy(stateCopy.RestartHistory, state.RestartHistory)
+	if state.ClusterLock != nil {
+		lockCopy := *state.ClusterLock
+		stateCopy.ClusterLock = &lockCopy
+	}
 	state.mu.Unlock()
 	
-	// Marshal to JSON
-	state.mu.RLock()
-	data, err := json.MarshalIndent(state, "", "  ")
-	state.mu.RUnlock()
-	
+	// Marshal to JSON (without holding lock)
+	data, err := json.MarshalIndent(&stateCopy, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal state: %v", err)
 	}
@@ -217,8 +230,9 @@ func UpdateSiteState(state *ServiceState, site Site, pingResult PingResult, logS
 			siteState.IsDown = true
 			siteState.DownSince = now
 			
-			// Log down alert to systemd journal
-			LogError("🔴 ALERT: %s is now DOWN", getSiteDisplayName(site))
+			// Log down alert to systemd journal (use same severity as ping failures)
+			LogWarn("🔴 DOWN: %s is now DOWN (packet loss: %d%%)", 
+				getSiteDisplayName(site), pingResult.PacketLoss)
 		}
 	}
 }

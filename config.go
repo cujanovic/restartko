@@ -200,6 +200,14 @@ func ValidateConfig(config Config) error {
 	if config.PowerLossRestartDelayMinutes < 0 {
 		errors = append(errors, "power_loss_restart_delay_minutes cannot be negative")
 	}
+	
+	// Validate DNS cache TTL
+	if config.DNSCacheTTLMinutes < 0 {
+		errors = append(errors, "dns_cache_ttl_minutes cannot be negative")
+	}
+	if config.DNSCacheTTLMinutes > 1440 {
+		errors = append(errors, "dns_cache_ttl_minutes should not exceed 1440 (24 hours)")
+	}
 
 	// Validate log level
 	validLogLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
@@ -271,18 +279,14 @@ func ValidateConfig(config Config) error {
 			errors = append(errors, "router.restart_url cannot be empty for generic_http type")
 		}
 		if config.Router.LoginMethod == "" {
-			config.Router.LoginMethod = "POST" // Default
+			errors = append(errors, "router.login_method cannot be empty for generic_http type (use POST or GET)")
 		}
 		if config.Router.RestartMethod == "" {
-			config.Router.RestartMethod = "POST" // Default
+			errors = append(errors, "router.restart_method cannot be empty for generic_http type (use POST or GET)")
 		}
 	case "ssh", "telnet":
 		if config.Router.Port <= 0 {
-			if config.Router.Type == "ssh" {
-				config.Router.Port = 22 // Default SSH port
-			} else {
-				config.Router.Port = 23 // Default Telnet port
-			}
+			errors = append(errors, "router.port must be specified for ssh/telnet type")
 		}
 		if config.Router.RestartCommand == "" {
 			errors = append(errors, "router.restart_command cannot be empty for ssh/telnet type")
@@ -290,7 +294,7 @@ func ValidateConfig(config Config) error {
 	}
 	
 	if config.Router.TimeoutSeconds <= 0 {
-		config.Router.TimeoutSeconds = 30 // Default
+		errors = append(errors, "router.timeout_seconds must be greater than 0")
 	}
 
 	if len(errors) > 0 {
