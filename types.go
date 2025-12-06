@@ -202,3 +202,57 @@ const (
 	EventClusterLockAcquired = "cluster_lock_acquired"
 	EventClusterLockReleased = "cluster_lock_released"
 )
+
+// CircuitBreakerState represents the state of a circuit breaker
+type CircuitBreakerState int
+
+const (
+	CircuitClosed CircuitBreakerState = iota // Normal operation
+	CircuitOpen                              // Failing, reject requests
+	CircuitHalfOpen                          // Testing if service recovered
+)
+
+// CircuitBreaker implements the circuit breaker pattern for router HTTP calls
+type CircuitBreaker struct {
+	state            CircuitBreakerState
+	failures         int
+	successes        int
+	lastFailure      time.Time
+	lastStateChange  time.Time
+	
+	// Configuration
+	maxFailures      int           // Failures before opening circuit
+	resetTimeout     time.Duration // Time before attempting half-open
+	halfOpenSuccesses int          // Successes needed to close circuit
+	
+	mu               sync.RWMutex
+}
+
+// DowntimeSignature represents a unique identifier for a connectivity failure event
+// Used for deduplication of restart attempts
+type DowntimeSignature struct {
+	DetectedAt    time.Time // When the outage was first detected (rounded to minute)
+	DownSitesHash string    // Hash of down sites for deduplication
+}
+
+// RestartCoordinator manages restart synchronization across goroutines
+type RestartCoordinator struct {
+	// Mutex for single restart handler execution
+	handlerMu        sync.Mutex
+	
+	// Global restart-in-progress flag
+	restartActive    bool
+	restartStartedAt time.Time
+	restartMu        sync.RWMutex
+	
+	// Deduplication tracking
+	lastHandledSignature *DowntimeSignature
+	signatureMu          sync.Mutex
+	
+	// Retry scheduling flag - prevents scheduling duplicate retries
+	retryScheduled      bool
+	retryScheduledAt    time.Time
+	retryMu             sync.Mutex
+	
+	// Note: Exponential backoff uses state.ConsecutiveRestartFails for persistence
+}

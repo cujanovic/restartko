@@ -1,19 +1,22 @@
 package main
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"net"
 	"sort"
+	"strings"
 	"time"
 )
 
 // Monitor handles the main monitoring and restart logic
 type Monitor struct {
-	config         Config
-	state          *ServiceState
-	clusterManager *ClusterManager
-	dnsCache       *DNSCache
-	stopChan       chan struct{}
+	config            Config
+	state             *ServiceState
+	clusterManager    *ClusterManager
+	dnsCache          *DNSCache
+	stopChan          chan struct{}
+	restartCoordinator *RestartCoordinator
 }
 
 // NewMonitor creates a new monitor instance
@@ -29,6 +32,7 @@ func NewMonitor(config Config, state *ServiceState) *Monitor {
 		state:    state,
 		dnsCache: NewDNSCache(dnsCacheTTL),
 		stopChan: make(chan struct{}),
+		restartCoordinator: &RestartCoordinator{},
 	}
 
 	// Initialize cluster manager if enabled
@@ -245,12 +249,36 @@ func (m *Monitor) checkSite(site Site, verificationSites []Site) {
 	LogError("🔴 Multiple sites are down - internet connectivity problem detected!")
 	LogError("   Down sites: %v", verifyResult.DownSites)
 
-	// Try to restart router
+	// Create downtime signature for deduplication
+	signature := m.createDowntimeSignature(verifyResult.DownSites)
+	
+	// Check if we should handle this failure (deduplication)
+	if !m.shouldHandleFailure(signature) {
+		LogDebug("Skipping duplicate connectivity failure handling (already being processed)")
+		return
+	}
+
+	// Try to restart router (with synchronization)
 	m.handleConnectivityFailure(verifyResult.DownSites)
 }
 
 // handleConnectivityFailure handles a detected connectivity failure
+// Uses mutex to ensure only one goroutine handles a failure at a time
 func (m *Monitor) handleConnectivityFailure(downSites []string) {
+	// Acquire handler mutex to prevent concurrent execution
+	// Use TryLock to avoid blocking - if another handler is running, skip
+	if !m.restartCoordinator.handlerMu.TryLock() {
+		LogDebug("Another connectivity failure handler is already running, skipping")
+		return
+	}
+	defer m.restartCoordinator.handlerMu.Unlock()
+	
+	// Check if a restart is already in progress
+	if m.isRestartInProgress() {
+		LogDebug("Restart already in progress, skipping connectivity failure handling")
+		return
+	}
+
 	LogInfo("🔧 Handling connectivity failure...")
 
 	// Apply grace period to allow router self-recovery
@@ -266,6 +294,8 @@ func (m *Monitor) handleConnectivityFailure(downSites []string) {
 		
 		if !verifyResult.AllDown {
 			LogInfo("✅ Connectivity restored during grace period - router recovered on its own!")
+			m.clearDowntimeSignature()
+			m.clearRetryScheduled()
 			return
 		}
 		
@@ -292,10 +322,29 @@ func (m *Monitor) handleConnectivityFailure(downSites []string) {
 			
 			if !verifyResult.AllDown {
 				LogInfo("✅ Connectivity restored after power loss - no restart needed")
+				m.clearDowntimeSignature()
+				m.clearRetryScheduled()
 				return
 			}
 			
 			LogWarn("Connectivity still down after power loss delay - proceeding with restart")
+		}
+	}
+
+	// Apply exponential backoff if we've had recent failures
+	backoffDelay := m.calculateBackoffDelay()
+	if backoffDelay > 0 {
+		LogInfo("⏳ Applying exponential backoff delay of %s before restart attempt...", formatDuration(backoffDelay))
+		time.Sleep(backoffDelay)
+		
+		// Re-verify connectivity after backoff
+		allSites := m.getAllSites()
+		verifyResult := VerifyConnectivityWithDNS(allSites, m.config.VerificationSiteCount, m.config, m.dnsCache)
+		if !verifyResult.AllDown {
+			LogInfo("✅ Connectivity restored during backoff period")
+			m.resetBackoff()
+			m.clearDowntimeSignature()
+			return
 		}
 	}
 
@@ -319,6 +368,10 @@ func (m *Monitor) handleConnectivityFailure(downSites []string) {
 		}
 		defer m.clusterManager.ReleaseLock()
 	}
+
+	// Mark restart as in progress
+	m.setRestartInProgress(true)
+	defer m.setRestartInProgress(false)
 
 	// Perform restart
 	m.performRestart("sites_down", downSites)
@@ -362,6 +415,8 @@ func (m *Monitor) performRestart(reason string, downSites []string) {
 		}
 		RecordEvent(m.state, event)
 
+		// Note: RecordRestartAttempt already incremented ConsecutiveRestartFails
+		
 		// Check if we should retry
 		m.scheduleRetryIfNeeded()
 		return
@@ -386,6 +441,10 @@ func (m *Monitor) performRestart(reason string, downSites []string) {
 			Duration:  restartResult.Duration,
 		}
 		RecordEvent(m.state, event)
+		
+		// Reset backoff on success
+		m.resetBackoff()
+		m.clearDowntimeSignature()
 	} else {
 		LogWarn("⚠️  Router restart completed but verification failed")
 
@@ -396,6 +455,8 @@ func (m *Monitor) performRestart(reason string, downSites []string) {
 		}
 		RecordEvent(m.state, event)
 
+		// Note: RecordRestartAttempt already incremented ConsecutiveRestartFails
+		
 		// Schedule retry
 		m.scheduleRetryIfNeeded()
 	}
@@ -417,6 +478,22 @@ func (m *Monitor) scheduleRetryIfNeeded() {
 		return
 	}
 
+	// Check if a retry is already scheduled
+	m.restartCoordinator.retryMu.Lock()
+	if m.restartCoordinator.retryScheduled {
+		// Check if the scheduled retry is still pending (less than retry delay ago)
+		retryDelay := time.Duration(m.config.RestartRetryDelayMinutes) * time.Minute
+		if time.Since(m.restartCoordinator.retryScheduledAt) < retryDelay {
+			m.restartCoordinator.retryMu.Unlock()
+			LogDebug("Retry already scheduled, skipping duplicate scheduling")
+			return
+		}
+	}
+	// Mark retry as scheduled
+	m.restartCoordinator.retryScheduled = true
+	m.restartCoordinator.retryScheduledAt = time.Now()
+	m.restartCoordinator.retryMu.Unlock()
+
 	retryDelay := time.Duration(m.config.RestartRetryDelayMinutes) * time.Minute
 	LogInfo("⏳ Scheduling restart retry in %s (attempt %d/%d)",
 		formatDuration(retryDelay), consecutiveFails+1, m.config.RestartMaxRetries)
@@ -424,6 +501,11 @@ func (m *Monitor) scheduleRetryIfNeeded() {
 	// Schedule retry
 	go func() {
 		time.Sleep(retryDelay)
+
+		// Clear retry scheduled flag
+		m.restartCoordinator.retryMu.Lock()
+		m.restartCoordinator.retryScheduled = false
+		m.restartCoordinator.retryMu.Unlock()
 
 		// Re-check if we still need to restart
 		allSites := m.getAllSites()
@@ -533,5 +615,126 @@ func (m *Monitor) preResolveDNS() {
 	
 	duration := time.Since(startTime)
 	LogInfo("✅ Pre-resolved %d DNS hostnames in %v", len(dnsHosts), duration)
+}
+
+// createDowntimeSignature creates a unique signature for a downtime event
+func (m *Monitor) createDowntimeSignature(downSites []string) *DowntimeSignature {
+	// Sort sites for consistent hashing
+	sortedSites := make([]string, len(downSites))
+	copy(sortedSites, downSites)
+	sort.Strings(sortedSites)
+	
+	// Create hash of down sites
+	hash := sha256.Sum256([]byte(strings.Join(sortedSites, ",")))
+	hashStr := fmt.Sprintf("%x", hash[:8]) // Use first 8 bytes for brevity
+	
+	// Round time to nearest minute for deduplication window
+	now := time.Now().Truncate(time.Minute)
+	
+	return &DowntimeSignature{
+		DetectedAt:    now,
+		DownSitesHash: hashStr,
+	}
+}
+
+// shouldHandleFailure checks if this failure should be handled (deduplication)
+func (m *Monitor) shouldHandleFailure(signature *DowntimeSignature) bool {
+	m.restartCoordinator.signatureMu.Lock()
+	defer m.restartCoordinator.signatureMu.Unlock()
+	
+	// If no previous signature, this is the first handler
+	if m.restartCoordinator.lastHandledSignature == nil {
+		m.restartCoordinator.lastHandledSignature = signature
+		return true
+	}
+	
+	lastSig := m.restartCoordinator.lastHandledSignature
+	
+	// If signature matches (same sites, within same minute), deduplicate
+	if lastSig.DownSitesHash == signature.DownSitesHash {
+		// Allow new handling if more than 5 minutes have passed (for retries)
+		if time.Since(lastSig.DetectedAt) < 5*time.Minute {
+			return false
+		}
+	}
+	
+	// Different signature or enough time has passed, allow handling
+	m.restartCoordinator.lastHandledSignature = signature
+	return true
+}
+
+// clearDowntimeSignature clears the last handled signature (on success)
+func (m *Monitor) clearDowntimeSignature() {
+	m.restartCoordinator.signatureMu.Lock()
+	defer m.restartCoordinator.signatureMu.Unlock()
+	m.restartCoordinator.lastHandledSignature = nil
+}
+
+// isRestartInProgress checks if a restart is currently in progress
+func (m *Monitor) isRestartInProgress() bool {
+	m.restartCoordinator.restartMu.RLock()
+	defer m.restartCoordinator.restartMu.RUnlock()
+	
+	if !m.restartCoordinator.restartActive {
+		return false
+	}
+	
+	// Consider restart stale if more than 10 minutes have passed
+	if time.Since(m.restartCoordinator.restartStartedAt) > 10*time.Minute {
+		return false
+	}
+	
+	return true
+}
+
+// setRestartInProgress sets the restart-in-progress flag
+func (m *Monitor) setRestartInProgress(active bool) {
+	m.restartCoordinator.restartMu.Lock()
+	defer m.restartCoordinator.restartMu.Unlock()
+	
+	m.restartCoordinator.restartActive = active
+	if active {
+		m.restartCoordinator.restartStartedAt = time.Now()
+	}
+}
+
+// calculateBackoffDelay calculates exponential backoff delay based on consecutive failures
+// Uses the state's ConsecutiveRestartFails counter for persistence across restarts
+func (m *Monitor) calculateBackoffDelay() time.Duration {
+	m.state.mu.RLock()
+	consecutiveFailures := m.state.ConsecutiveRestartFails
+	m.state.mu.RUnlock()
+	
+	// No backoff on first attempt
+	if consecutiveFailures == 0 {
+		return 0
+	}
+	
+	// Exponential backoff: 30s, 60s, 120s, 240s, max 5 minutes
+	baseDelay := 30 * time.Second
+	multiplier := 1 << (consecutiveFailures - 1) // 2^(n-1)
+	delay := baseDelay * time.Duration(multiplier)
+	
+	maxDelay := 5 * time.Minute
+	if delay > maxDelay {
+		delay = maxDelay
+	}
+	
+	return delay
+}
+
+// resetBackoff resets the backoff counter after success
+// Note: The counter is reset via RecordRestartAttempt on success
+func (m *Monitor) resetBackoff() {
+	// State's ConsecutiveRestartFails is already reset by RecordRestartAttempt
+	// Also clear any pending retry
+	m.clearRetryScheduled()
+}
+
+// clearRetryScheduled clears the retry scheduled flag
+func (m *Monitor) clearRetryScheduled() {
+	m.restartCoordinator.retryMu.Lock()
+	m.restartCoordinator.retryScheduled = false
+	m.restartCoordinator.retryMu.Unlock()
 }
 

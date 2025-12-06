@@ -12,11 +12,124 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
 	"golang.org/x/crypto/ssh"
 )
+
+// Global circuit breaker for router HTTP calls
+var routerCircuitBreaker = &CircuitBreaker{
+	state:             CircuitClosed,
+	maxFailures:       3,
+	resetTimeout:      30 * time.Second,
+	halfOpenSuccesses: 2,
+}
+
+// NewCircuitBreaker creates a new circuit breaker with default settings
+func NewCircuitBreaker() *CircuitBreaker {
+	return &CircuitBreaker{
+		state:             CircuitClosed,
+		maxFailures:       3,
+		resetTimeout:      30 * time.Second,
+		halfOpenSuccesses: 2,
+	}
+}
+
+// CanExecute checks if the circuit breaker allows execution
+func (cb *CircuitBreaker) CanExecute() bool {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	
+	switch cb.state {
+	case CircuitClosed:
+		return true
+	case CircuitOpen:
+		// Check if we should transition to half-open
+		if time.Since(cb.lastStateChange) > cb.resetTimeout {
+			cb.state = CircuitHalfOpen
+			cb.successes = 0
+			cb.lastStateChange = time.Now()
+			LogInfo("🔌 Circuit breaker: transitioning to half-open state")
+			return true
+		}
+		return false
+	case CircuitHalfOpen:
+		return true
+	}
+	return true
+}
+
+// RecordSuccess records a successful operation
+func (cb *CircuitBreaker) RecordSuccess() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	
+	switch cb.state {
+	case CircuitHalfOpen:
+		cb.successes++
+		if cb.successes >= cb.halfOpenSuccesses {
+			cb.state = CircuitClosed
+			cb.failures = 0
+			cb.lastStateChange = time.Now()
+			LogInfo("🔌 Circuit breaker: closed (service recovered)")
+		}
+	case CircuitClosed:
+		// Reset failure count on success
+		cb.failures = 0
+	}
+}
+
+// RecordFailure records a failed operation
+func (cb *CircuitBreaker) RecordFailure() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	
+	cb.failures++
+	cb.lastFailure = time.Now()
+	
+	switch cb.state {
+	case CircuitClosed:
+		if cb.failures >= cb.maxFailures {
+			cb.state = CircuitOpen
+			cb.lastStateChange = time.Now()
+			LogWarn("🔌 Circuit breaker: opened (too many failures)")
+		}
+	case CircuitHalfOpen:
+		// Any failure in half-open state reopens the circuit
+		cb.state = CircuitOpen
+		cb.lastStateChange = time.Now()
+		LogWarn("🔌 Circuit breaker: reopened (failure during recovery)")
+	}
+}
+
+// GetState returns the current circuit breaker state as a string
+func (cb *CircuitBreaker) GetState() string {
+	cb.mu.RLock()
+	defer cb.mu.RUnlock()
+	
+	switch cb.state {
+	case CircuitClosed:
+		return "closed"
+	case CircuitOpen:
+		return "open"
+	case CircuitHalfOpen:
+		return "half-open"
+	}
+	return "unknown"
+}
+
+// HTTP client pool for router connections
+var routerClientPool = sync.Pool{
+	New: func() interface{} {
+		jar, _ := cookiejar.New(nil)
+		return &http.Client{
+			Jar:     jar,
+			Timeout: 30 * time.Second,
+		}
+	},
+}
 
 // RestartRouter restarts the router based on configuration
 func RestartRouter(config RouterConfig) RestartResult {
@@ -58,9 +171,16 @@ func RestartRouter(config RouterConfig) RestartResult {
 
 // restartRouterHTTP restarts router via HTTP interface
 func restartRouterHTTP(config RouterConfig) error {
+	// Check circuit breaker before attempting
+	if !routerCircuitBreaker.CanExecute() {
+		return fmt.Errorf("circuit breaker open - router HTTP calls temporarily disabled (state: %s)", 
+			routerCircuitBreaker.GetState())
+	}
+
 	// Create HTTP client with cookie jar for session management
 	jar, err := cookiejar.New(nil)
 	if err != nil {
+		routerCircuitBreaker.RecordFailure()
 		return fmt.Errorf("failed to create cookie jar: %v", err)
 	}
 
@@ -74,20 +194,22 @@ func restartRouterHTTP(config RouterConfig) error {
 		},
 	}
 
-	// Step 1: Login
+	// Step 1: Login with retry
 	LogInfo("🔐 Logging into router at %s", config.LoginURL)
-	if err := loginRouterHTTP(client, config); err != nil {
+	if err := loginRouterHTTPWithRetry(client, config, 2); err != nil {
+		routerCircuitBreaker.RecordFailure()
 		return fmt.Errorf("login failed: %v", err)
 	}
 
 	LogInfo("✅ Router login successful")
 
-	// Step 2: Get CSRF token if enabled
+	// Step 2: Get CSRF token if enabled (with retry)
 	var csrfToken string
 	if config.CSRFEnabled {
 		LogInfo("🔑 Fetching CSRF token...")
-		token, err := getCSRFToken(client, config)
+		token, err := getCSRFTokenWithRetry(client, config, 3)
 		if err != nil {
+			routerCircuitBreaker.RecordFailure()
 			return fmt.Errorf("failed to get CSRF token: %v", err)
 		}
 		csrfToken = token
@@ -97,12 +219,55 @@ func restartRouterHTTP(config RouterConfig) error {
 	// Step 3: Send restart command
 	LogInfo("📤 Sending restart command to router")
 	if err := sendRestartCommandHTTP(client, config, csrfToken); err != nil {
+		routerCircuitBreaker.RecordFailure()
 		return fmt.Errorf("restart command failed: %v", err)
 	}
 	
+	// Record success
+	routerCircuitBreaker.RecordSuccess()
 	LogInfo("✅ Restart command sent successfully")
 
 	return nil
+}
+
+// loginRouterHTTPWithRetry performs HTTP login with retry logic
+func loginRouterHTTPWithRetry(client *http.Client, config RouterConfig, maxRetries int) error {
+	var lastErr error
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		err := loginRouterHTTP(client, config)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if attempt < maxRetries {
+			delay := time.Duration(attempt) * 500 * time.Millisecond
+			LogDebug("Login attempt %d failed, retrying in %v: %v", attempt, delay, err)
+			time.Sleep(delay)
+		}
+	}
+	return lastErr
+}
+
+// getCSRFTokenWithRetry extracts CSRF token with retry logic
+func getCSRFTokenWithRetry(client *http.Client, config RouterConfig, maxRetries int) (string, error) {
+	var lastErr error
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		token, err := getCSRFToken(client, config)
+		if err == nil && token != "" {
+			return token, nil
+		}
+		if err != nil {
+			lastErr = err
+		} else {
+			lastErr = fmt.Errorf("empty token returned")
+		}
+		if attempt < maxRetries {
+			delay := time.Duration(attempt) * 500 * time.Millisecond
+			LogDebug("CSRF token attempt %d failed, retrying in %v: %v", attempt, delay, lastErr)
+			time.Sleep(delay)
+		}
+	}
+	return "", lastErr
 }
 
 // loginRouterHTTP performs HTTP login
@@ -231,10 +396,19 @@ func getCSRFToken(client *http.Client, config RouterConfig) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	// Read response body
-	body, err := io.ReadAll(resp.Body)
+	// Check response status
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		return "", fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	// Read response body with size limit
+	body, err := readResponseBody(resp)
 	if err != nil {
 		return "", fmt.Errorf("failed to read response: %v", err)
+	}
+
+	if len(body) == 0 {
+		return "", fmt.Errorf("empty response body")
 	}
 
 	bodyStr := string(body)
@@ -502,11 +676,25 @@ func VerifyRestartSuccess(sites []Site, config Config, dnsCache *DNSCache) bool 
 	return success
 }
 
+// maxResponseSize is the maximum size of HTTP response body to read (10MB)
+const maxResponseSize = 10 * 1024 * 1024
+
+// readResponseBody reads the response body with a size limit
+func readResponseBody(resp *http.Response) ([]byte, error) {
+	limitedReader := io.LimitReader(resp.Body, maxResponseSize)
+	return io.ReadAll(limitedReader)
+}
+
 // GetRouterUptime fetches and parses the router uptime from the configured URL
 // Returns uptime duration and whether a power outage is suspected
 func GetRouterUptime(config RouterConfig) (time.Duration, bool, error) {
 	if !config.UptimeCheckEnabled || config.UptimeCheckURL == "" {
 		return 0, false, fmt.Errorf("uptime check not enabled or URL not configured")
+	}
+	
+	// Check circuit breaker
+	if !routerCircuitBreaker.CanExecute() {
+		return 0, false, fmt.Errorf("circuit breaker open - router HTTP calls temporarily disabled")
 	}
 	
 	LogInfo("📊 Checking router uptime from %s", config.UptimeCheckURL)
@@ -569,12 +757,14 @@ func GetRouterUptime(config RouterConfig) (time.Duration, bool, error) {
 	
 	resp, err := client.Do(req)
 	if err != nil {
+		routerCircuitBreaker.RecordFailure()
 		return 0, false, fmt.Errorf("failed to fetch uptime page: %v", err)
 	}
 	defer resp.Body.Close()
 	
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponseBody(resp)
 	if err != nil {
+		routerCircuitBreaker.RecordFailure()
 		return 0, false, fmt.Errorf("failed to read response body: %v", err)
 	}
 	
@@ -587,6 +777,9 @@ func GetRouterUptime(config RouterConfig) (time.Duration, bool, error) {
 	}
 	
 	LogInfo("📊 Router uptime: %s", formatDuration(uptime))
+	
+	// Record success with circuit breaker
+	routerCircuitBreaker.RecordSuccess()
 	
 	// Consider it a power outage if uptime is less than 10 minutes
 	powerOutageSuspected := uptime < 10*time.Minute

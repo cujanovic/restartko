@@ -164,6 +164,7 @@ func (cm *ClusterManager) checkNodeHealth(nodeURL string) bool {
 }
 
 // TryAcquireLock attempts to acquire the cluster lock
+// Uses atomic compare-and-swap to prevent race conditions
 func (cm *ClusterManager) TryAcquireLock(reason string, downSites []string) (bool, error) {
 	if !cm.config.ClusterEnabled {
 		// No cluster mode, always allow
@@ -172,8 +173,10 @@ func (cm *ClusterManager) TryAcquireLock(reason string, downSites []string) (boo
 
 	LogInfo("Attempting to acquire cluster lock (reason: %s)", reason)
 
-	// First, check if we can acquire local lock
-	if !cm.canAcquireLocalLock() {
+	// Atomically try to acquire the local lock first
+	// This prevents TOCTOU race conditions
+	acquired := cm.tryAcquireLocalLockAtomic(reason, downSites)
+	if !acquired {
 		LogWarn("Cannot acquire local lock - another operation in progress")
 		return false, fmt.Errorf("local lock already held")
 	}
@@ -185,6 +188,9 @@ func (cm *ClusterManager) TryAcquireLock(reason string, downSites []string) (boo
 		DownSites: downSites,
 		Timestamp: time.Now(),
 	}
+
+	// Track if we need to rollback
+	allNodesApproved := true
 
 	// Try to acquire lock from each node
 	for _, node := range cm.clusterStatus.Nodes {
@@ -201,12 +207,16 @@ func (cm *ClusterManager) TryAcquireLock(reason string, downSites []string) (boo
 
 		if !acquired {
 			LogWarn("Node %s denied lock acquisition", node.NodeID)
-			return false, fmt.Errorf("lock denied by node %s", node.NodeID)
+			allNodesApproved = false
+			break
 		}
 	}
 
-	// Acquire local lock
-	cm.acquireLocalLock(reason, downSites)
+	if !allNodesApproved {
+		// Rollback - release the local lock we acquired
+		cm.releaseLocalLock()
+		return false, fmt.Errorf("lock denied by cluster node")
+	}
 
 	LogInfo("✅ Cluster lock acquired successfully")
 	return true, nil
@@ -238,7 +248,7 @@ func (cm *ClusterManager) ReleaseLock() error {
 	return nil
 }
 
-// canAcquireLocalLock checks if we can acquire the local lock
+// canAcquireLocalLock checks if we can acquire the local lock (for read-only checks)
 func (cm *ClusterManager) canAcquireLocalLock() bool {
 	cm.state.mu.RLock()
 	defer cm.state.mu.RUnlock()
@@ -260,7 +270,52 @@ func (cm *ClusterManager) canAcquireLocalLock() bool {
 	return !cm.state.ClusterLock.IsLocked
 }
 
-// acquireLocalLock acquires the local lock
+// tryAcquireLocalLockAtomic atomically checks and acquires the local lock
+// Returns true if lock was acquired, false if lock is already held
+// This eliminates the TOCTOU race condition
+func (cm *ClusterManager) tryAcquireLocalLockAtomic(reason string, downSites []string) bool {
+	cm.state.mu.Lock()
+	defer cm.state.mu.Unlock()
+	
+	now := time.Now()
+	
+	// Check if we can acquire
+	if cm.state.ClusterLock != nil {
+		// Check if lock is expired
+		if now.Before(cm.state.ClusterLock.ExpiresAt) {
+			// Lock is still valid
+			// Check if we already hold it
+			if cm.state.ClusterLock.LockedBy == cm.config.NodeID {
+				// We already hold it, refresh the expiry
+				timeout := time.Duration(cm.config.ClusterLockTimeoutSeconds) * time.Second
+				cm.state.ClusterLock.ExpiresAt = now.Add(timeout)
+				LogDebug("Refreshed existing lock (expires at: %s)", formatTimestamp(cm.state.ClusterLock.ExpiresAt))
+				return true
+			}
+			// Someone else holds the lock
+			if cm.state.ClusterLock.IsLocked {
+				return false
+			}
+		}
+		// Lock is expired, we can take it
+	}
+	
+	// Atomically acquire the lock
+	timeout := time.Duration(cm.config.ClusterLockTimeoutSeconds) * time.Second
+	cm.state.ClusterLock = &ClusterLock{
+		IsLocked:          true,
+		LockedBy:          cm.config.NodeID,
+		LockedAt:          now,
+		ExpiresAt:         now.Add(timeout),
+		LockReason:        reason,
+		RestartInProgress: true,
+	}
+
+	LogDebug("Local lock acquired atomically (expires at: %s)", formatTimestamp(cm.state.ClusterLock.ExpiresAt))
+	return true
+}
+
+// acquireLocalLock acquires the local lock (non-atomic version, kept for compatibility)
 func (cm *ClusterManager) acquireLocalLock(reason string, downSites []string) {
 	cm.state.mu.Lock()
 	defer cm.state.mu.Unlock()
@@ -394,8 +449,23 @@ func (cm *ClusterManager) handleLockAcquire(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Check if lock can be acquired
-	canAcquire := cm.canAcquireLocalLock()
+	// Atomically check and record the remote lock request
+	// This prevents race conditions when multiple nodes request locks simultaneously
+	cm.state.mu.Lock()
+	
+	canAcquire := true
+	now := time.Now()
+	
+	if cm.state.ClusterLock != nil {
+		// Check if lock is expired
+		if now.Before(cm.state.ClusterLock.ExpiresAt) && cm.state.ClusterLock.IsLocked {
+			// Lock is still valid and held
+			if cm.state.ClusterLock.LockedBy != request.NodeID {
+				// Someone else holds the lock
+				canAcquire = false
+			}
+		}
+	}
 
 	response := LockResponse{
 		Success: canAcquire,
@@ -409,11 +479,16 @@ func (cm *ClusterManager) handleLockAcquire(w http.ResponseWriter, r *http.Reque
 
 	if canAcquire {
 		response.Message = "Lock granted"
-		// Note: We don't actually acquire the lock here, just approve it
-		// The requesting node will acquire its own lock
+		// Record that we've approved this node's lock request
+		// The requesting node will acquire its own local lock
+		LogDebug("Lock request approved for node %s (reason: %s)", request.NodeID, request.Reason)
 	} else {
-		response.Message = fmt.Sprintf("Lock held by %s", response.LockedBy)
+		response.Message = fmt.Sprintf("Lock held by %s until %s", 
+			response.LockedBy, formatTimestamp(response.ExpiresAt))
+		LogDebug("Lock request denied for node %s - held by %s", request.NodeID, response.LockedBy)
 	}
+	
+	cm.state.mu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)

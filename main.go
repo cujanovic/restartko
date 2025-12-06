@@ -206,7 +206,8 @@ func handleTestRouter(config Config) {
 	fmt.Println("═══════════════════════════════════════════")
 	fmt.Println("\n⚠️  WARNING: This is a DRY-RUN test.")
 	fmt.Println("   The router will NOT actually be restarted.")
-	fmt.Println("   This only tests authentication and connectivity.\n")
+	fmt.Println("   This only tests authentication and connectivity.")
+	fmt.Println()
 
 	// For HTTP routers, test login
 	if config.Router.Type == "generic_http" {
