@@ -220,6 +220,12 @@ func (m *Monitor) calculateClusterStagger() int {
 
 // checkSite checks a single site and handles failures
 func (m *Monitor) checkSite(site Site, verificationSites []Site) {
+	// Early check: skip if restart is in progress
+	if m.isRestartInProgress() {
+		LogDebug("Skipping site check - restart in progress")
+		return
+	}
+
 	LogDebug("Checking site: %s", getSiteDisplayName(site))
 
 	// Ping the site with DNS cache
@@ -233,8 +239,28 @@ func (m *Monitor) checkSite(site Site, verificationSites []Site) {
 		return
 	}
 
+	// Site is down - check again if restart started while we were pinging
+	if m.isRestartInProgress() {
+		LogDebug("Skipping verification - restart started during ping")
+		return
+	}
+
 	// Site is down - verify with other sites
 	LogWarn("⚠️  Site %s appears to be DOWN, verifying with other sites...", getSiteDisplayName(site))
+
+	// Use mutex to prevent parallel verifications
+	// Only one goroutine should run verification at a time
+	if !m.restartCoordinator.verificationMu.TryLock() {
+		LogDebug("Another verification is already running, skipping")
+		return
+	}
+	defer m.restartCoordinator.verificationMu.Unlock()
+
+	// Double-check restart status after acquiring lock
+	if m.isRestartInProgress() {
+		LogDebug("Skipping verification - restart started while waiting for lock")
+		return
+	}
 
 	// Verify connectivity with other sites
 	verifyResult := VerifyConnectivityWithDNS(verificationSites, m.config.VerificationSiteCount, m.config, m.dnsCache)

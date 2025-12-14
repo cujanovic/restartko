@@ -254,5 +254,9 @@ type RestartCoordinator struct {
 	retryScheduledAt    time.Time
 	retryMu             sync.Mutex
 	
+	// Verification mutex - prevents parallel verification runs
+	verificationMu      sync.Mutex
+	verificationRunning bool
+	
 	// Note: Exponential backoff uses state.ConsecutiveRestartFails for persistence
 }
