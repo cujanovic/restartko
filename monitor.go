@@ -328,7 +328,51 @@ func (m *Monitor) handleConnectivityFailure(downSites []string) {
 		LogWarn("⚠️  Connectivity still down after grace period - proceeding with restart logic")
 	}
 
+	// Apply exponential backoff if we've had recent failures
+	backoffDelay := m.calculateBackoffDelay()
+	if backoffDelay > 0 {
+		LogInfo("⏳ Applying exponential backoff delay of %s before restart attempt...", formatDuration(backoffDelay))
+		time.Sleep(backoffDelay)
+		
+		// Re-verify connectivity after backoff
+		allSites := m.getAllSites()
+		verifyResult := VerifyConnectivityWithDNS(allSites, m.config.VerificationSiteCount, m.config, m.dnsCache)
+		if !verifyResult.AllDown {
+			LogInfo("✅ Connectivity restored during backoff period")
+			m.resetBackoff()
+			m.clearDowntimeSignature()
+			return
+		}
+	}
+
+	// Check if we can attempt a restart (cheap local check first)
+	canRestart, reason := CanAttemptRestart(m.state, m.config.RestartCooldownMinutes, m.config.RestartMaxRetries)
+	if !canRestart {
+		LogWarn("Cannot attempt restart: %s", reason)
+		return
+	}
+
+	// Try to acquire cluster lock BEFORE hitting the router
+	// This prevents multiple nodes from hammering the router with uptime checks
+	if m.clusterManager != nil {
+		acquired, err := m.clusterManager.TryAcquireLock("sites_down", downSites)
+		if err != nil {
+			LogError("Failed to acquire cluster lock: %v", err)
+			return
+		}
+		if !acquired {
+			LogWarn("Could not acquire cluster lock - another node is handling the restart")
+			return
+		}
+		defer m.clusterManager.ReleaseLock()
+	}
+
+	// Mark restart as in progress
+	m.setRestartInProgress(true)
+	defer m.setRestartInProgress(false)
+
 	// Check router uptime for power outage detection
+	// Done AFTER acquiring the lock so only the winning node hits the router
 	if m.config.Router.UptimeCheckEnabled {
 		routerUptime, powerOutageSuspected, err := GetRouterUptime(m.config.Router)
 		if err != nil {
@@ -356,48 +400,6 @@ func (m *Monitor) handleConnectivityFailure(downSites []string) {
 			LogWarn("Connectivity still down after power loss delay - proceeding with restart")
 		}
 	}
-
-	// Apply exponential backoff if we've had recent failures
-	backoffDelay := m.calculateBackoffDelay()
-	if backoffDelay > 0 {
-		LogInfo("⏳ Applying exponential backoff delay of %s before restart attempt...", formatDuration(backoffDelay))
-		time.Sleep(backoffDelay)
-		
-		// Re-verify connectivity after backoff
-		allSites := m.getAllSites()
-		verifyResult := VerifyConnectivityWithDNS(allSites, m.config.VerificationSiteCount, m.config, m.dnsCache)
-		if !verifyResult.AllDown {
-			LogInfo("✅ Connectivity restored during backoff period")
-			m.resetBackoff()
-			m.clearDowntimeSignature()
-			return
-		}
-	}
-
-	// Check if we can attempt a restart
-	canRestart, reason := CanAttemptRestart(m.state, m.config.RestartCooldownMinutes, m.config.RestartMaxRetries)
-	if !canRestart {
-		LogWarn("Cannot attempt restart: %s", reason)
-		return
-	}
-
-	// Try to acquire cluster lock if cluster mode is enabled
-	if m.clusterManager != nil {
-		acquired, err := m.clusterManager.TryAcquireLock("sites_down", downSites)
-		if err != nil {
-			LogError("Failed to acquire cluster lock: %v", err)
-			return
-		}
-		if !acquired {
-			LogWarn("Could not acquire cluster lock - another node is handling the restart")
-			return
-		}
-		defer m.clusterManager.ReleaseLock()
-	}
-
-	// Mark restart as in progress
-	m.setRestartInProgress(true)
-	defer m.setRestartInProgress(false)
 
 	// Perform restart
 	m.performRestart("sites_down", downSites)

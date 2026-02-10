@@ -256,7 +256,6 @@ type RestartCoordinator struct {
 	
 	// Verification mutex - prevents parallel verification runs
 	verificationMu      sync.Mutex
-	verificationRunning bool
 	
 	// Note: Exponential backoff uses state.ConsecutiveRestartFails for persistence
 }

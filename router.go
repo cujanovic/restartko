@@ -12,7 +12,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
@@ -118,17 +117,6 @@ func (cb *CircuitBreaker) GetState() string {
 		return "half-open"
 	}
 	return "unknown"
-}
-
-// HTTP client pool for router connections
-var routerClientPool = sync.Pool{
-	New: func() interface{} {
-		jar, _ := cookiejar.New(nil)
-		return &http.Client{
-			Jar:     jar,
-			Timeout: 30 * time.Second,
-		}
-	},
 }
 
 // RestartRouter restarts the router based on configuration
@@ -762,10 +750,26 @@ func GetRouterUptime(config RouterConfig) (time.Duration, bool, error) {
 	}
 	defer resp.Body.Close()
 	
+	// Check for error status codes
+	// Note: Go's http.Client follows redirects automatically, so 3xx won't appear here.
+	// A redirect to login page would result in status 200 with the login page HTML,
+	// which will fail during uptime parsing (and be caught there).
+	if resp.StatusCode != 200 {
+		routerCircuitBreaker.RecordFailure()
+		return 0, false, fmt.Errorf("uptime page returned status %d", resp.StatusCode)
+	}
+	
 	body, err := readResponseBody(resp)
 	if err != nil {
 		routerCircuitBreaker.RecordFailure()
 		return 0, false, fmt.Errorf("failed to read response body: %v", err)
+	}
+	
+	LogDebug("Uptime page response: status=%d, body_length=%d bytes", resp.StatusCode, len(body))
+	
+	if len(body) == 0 {
+		routerCircuitBreaker.RecordFailure()
+		return 0, false, fmt.Errorf("uptime page returned empty response")
 	}
 	
 	bodyStr := string(body)
@@ -773,6 +777,12 @@ func GetRouterUptime(config RouterConfig) (time.Duration, bool, error) {
 	// Parse uptime from HTML
 	uptime, err := parseRouterUptime(bodyStr, config.UptimePattern)
 	if err != nil {
+		// Log a larger HTML preview at warn level for troubleshooting
+		preview := bodyStr
+		if len(preview) > 1000 {
+			preview = preview[:1000] + "..."
+		}
+		LogDebug("Uptime page HTML that failed parsing:\n%s", preview)
 		return 0, false, fmt.Errorf("failed to parse uptime: %v", err)
 	}
 	
@@ -928,25 +938,74 @@ func parseRouterUptime(html string, customPattern string) (time.Duration, error)
 		})
 	}
 	
-	// Strategy 3: Fallback to searching entire text content
+	// Strategy 3: Search raw HTML for JavaScript variables containing uptime
+	// Technicolor routers populate uptime via JS: var system_uptime = "73 days 2h:15m:30s"
+	if uptimeStr == "" {
+		LogDebug("Strategy 3: Searching raw HTML for JS uptime variables")
+		
+		jsUptimePatterns := []string{
+			// var system_uptime = "73 days 2h:15m:30s"
+			`(?i)(?:system_?uptime|uptime)\s*=\s*["'](\d+\s+days?\s+\d+h:\d+m:\d+s)["']`,
+			`(?i)(?:system_?uptime|uptime)\s*=\s*["'](\d+h:\d+m:\d+s)["']`,
+			// data-value="73 days 2h:15m:30s" or value="73 days 2h:15m:30s"
+			`(?i)(?:data-value|value)\s*=\s*["'](\d+\s+days?\s+\d+h:\d+m:\d+s)["']`,
+			`(?i)(?:data-value|value)\s*=\s*["'](\d+h:\d+m:\d+s)["']`,
+			// Generic JS: "73 days 2h:15m:30s" anywhere in script context
+			`["'](\d+\s+days?\s+\d+h:\d+m:\d+s)["']`,
+			`["'](\d+h:\d+m:\d+s)["']`,
+		}
+		
+		for _, pattern := range jsUptimePatterns {
+			re := regexp.MustCompile(pattern)
+			matches := re.FindStringSubmatch(html)
+			if len(matches) > 1 {
+				uptimeStr = strings.TrimSpace(matches[1])
+				LogDebug("Strategy 3: Found uptime via JS pattern: %s", uptimeStr)
+				break
+			}
+		}
+	}
+	
+	// Strategy 4: Fallback to searching entire text content
 	if uptimeStr == "" {
 		bodyText := doc.Find("body").Text()
-		LogDebug("Strategy 3: Searching body text for uptime pattern (text length: %d)", len(bodyText))
+		LogDebug("Strategy 4: Searching body text for uptime pattern (text length: %d)", len(bodyText))
 		
 		// Look for uptime pattern in text
 		uptimeRe := regexp.MustCompile(`(\d+\s+days?\s+\d+h:\d+m:\d+s|\d+h:\d+m:\d+s)`)
 		matches := uptimeRe.FindStringSubmatch(bodyText)
 		if len(matches) > 1 {
 			uptimeStr = strings.TrimSpace(matches[1])
-			LogDebug("Strategy 3: Found uptime via regex: %s", uptimeStr)
+			LogDebug("Strategy 4: Found uptime via regex: %s", uptimeStr)
 		} else {
-			LogDebug("Strategy 3: No match found with regex")
+			LogDebug("Strategy 4: No match found with regex")
 			// Try a more lenient pattern
 			uptimeRe2 := regexp.MustCompile(`(\d+\s+day[s]?\s+\d+h:\d+m:\d+s)`)
 			matches2 := uptimeRe2.FindStringSubmatch(bodyText)
 			if len(matches2) > 1 {
 				uptimeStr = strings.TrimSpace(matches2[1])
-				LogDebug("Strategy 3: Found uptime via lenient regex: %s", uptimeStr)
+				LogDebug("Strategy 4: Found uptime via lenient regex: %s", uptimeStr)
+			}
+		}
+	}
+	
+	// Strategy 5: Search raw HTML source (not parsed text) for uptime-like values
+	// This catches cases where goquery can't find it but the value is in the raw source
+	if uptimeStr == "" {
+		LogDebug("Strategy 5: Searching raw HTML source for uptime patterns")
+		rawPatterns := []string{
+			`(\d+\s+days?\s+\d+h:\d+m:\d+s)`,
+			`(\d+h:\d+m:\d+s)`,
+			`(\d+\s+days?\s+\d+h\s+\d+m\s+\d+s)`,
+			`(\d+h\s+\d+m\s+\d+s)`,
+		}
+		for _, pattern := range rawPatterns {
+			re := regexp.MustCompile(pattern)
+			matches := re.FindStringSubmatch(html)
+			if len(matches) > 1 {
+				uptimeStr = strings.TrimSpace(matches[1])
+				LogDebug("Strategy 5: Found uptime in raw HTML: %s", uptimeStr)
+				break
 			}
 		}
 	}

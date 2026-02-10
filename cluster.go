@@ -248,28 +248,6 @@ func (cm *ClusterManager) ReleaseLock() error {
 	return nil
 }
 
-// canAcquireLocalLock checks if we can acquire the local lock (for read-only checks)
-func (cm *ClusterManager) canAcquireLocalLock() bool {
-	cm.state.mu.RLock()
-	defer cm.state.mu.RUnlock()
-
-	if cm.state.ClusterLock == nil {
-		return true
-	}
-
-	// Check if lock is expired
-	if time.Now().After(cm.state.ClusterLock.ExpiresAt) {
-		return true
-	}
-
-	// Check if we already hold the lock
-	if cm.state.ClusterLock.LockedBy == cm.config.NodeID {
-		return true
-	}
-
-	return !cm.state.ClusterLock.IsLocked
-}
-
 // tryAcquireLocalLockAtomic atomically checks and acquires the local lock
 // Returns true if lock was acquired, false if lock is already held
 // This eliminates the TOCTOU race condition
@@ -313,24 +291,6 @@ func (cm *ClusterManager) tryAcquireLocalLockAtomic(reason string, downSites []s
 
 	LogDebug("Local lock acquired atomically (expires at: %s)", formatTimestamp(cm.state.ClusterLock.ExpiresAt))
 	return true
-}
-
-// acquireLocalLock acquires the local lock (non-atomic version, kept for compatibility)
-func (cm *ClusterManager) acquireLocalLock(reason string, downSites []string) {
-	cm.state.mu.Lock()
-	defer cm.state.mu.Unlock()
-
-	timeout := time.Duration(cm.config.ClusterLockTimeoutSeconds) * time.Second
-	cm.state.ClusterLock = &ClusterLock{
-		IsLocked:          true,
-		LockedBy:          cm.config.NodeID,
-		LockedAt:          time.Now(),
-		ExpiresAt:         time.Now().Add(timeout),
-		LockReason:        reason,
-		RestartInProgress: true,
-	}
-
-	LogDebug("Local lock acquired (expires at: %s)", formatTimestamp(cm.state.ClusterLock.ExpiresAt))
 }
 
 // releaseLocalLock releases the local lock
